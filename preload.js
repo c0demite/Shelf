@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('hub', {
   getLibrary: () => ipcRenderer.invoke('library:get'),
@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('hub', {
   getUpdate: () => ipcRenderer.invoke('update:get'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  pickToAdd: () => ipcRenderer.invoke('add:pick'),
+  inspectFile: (f) => ipcRenderer.invoke('add:inspect', f),
+  addItem: (data) => ipcRenderer.invoke('add:save', data),
+  removeItem: (id) => ipcRenderer.invoke('item:remove', id),
+  pathForFile: (file) => webUtils.getPathForFile(file),
+  searchCovers: (q) => ipcRenderer.invoke('cover:search', q),
+  setCover: (id, choice) => ipcRenderer.invoke('cover:set', id, choice),
   setTheme: (t) => ipcRenderer.invoke('theme:set', t),
   quickResize: (h) => ipcRenderer.invoke('quick:resize', h),
   quickHide: () => ipcRenderer.invoke('quick:hide'),

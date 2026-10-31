@@ -1,5 +1,7 @@
-const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen, nativeTheme, dialog, protocol, net } = require('electron');
 const path = require('path');
+const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const fs = require('fs');
 const { spawn, execFile } = require('child_process');
 const { scanAll } = require('./src/scanner');
@@ -15,6 +17,7 @@ const flag = (name) => {
 };
 
 app.setAppUserModelId('io.github.c0demite.shelf');
+protocol.registerSchemesAsPrivileged([{ scheme: 'shelf', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
 // Early builds were called "App Hub" and kept data in %APPDATA%\app-hub – carry it over once
 (function migrateOldData() {
@@ -45,6 +48,7 @@ if (flag('--dump') || flag('--screenshot')) {
 }
 const userDir = app.getPath('userData');
 const STATE_FILE = path.join(userDir, 'state.json');
+const COVER_DIR = path.join(userDir, 'covers');
 let state = { items: [], overrides: {}, covers: {}, headers: {}, lastScan: null, drives: [] };
 let win = null;
 let scanning = false;
@@ -56,6 +60,7 @@ function loadState() {
     state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
     delete state.icons; // old low-quality icon cache
   } catch {}
+  state.items = withManual(state.items);
   I18N.setLang(state.lang || 'en');
 }
 let saveTimer = null;
@@ -78,7 +83,8 @@ const send = (ch, data) =>
 function view(it) {
   const ov = state.overrides[it.id] || {};
   const c = state.covers[norm(it.name)];
-  const cover = it.steamAppId || (typeof c === 'string' && !GENERIC_NAMES.has(norm(it.name)) ? c : null);
+  const auto = it.steamAppId || (typeof c === 'string' && !GENERIC_NAMES.has(norm(it.name)) ? c : null);
+  const cover = ov.coverFile ? null : ov.coverAppId || auto;
   return {
     ...it,
     category: ov.category || it.category,
@@ -93,6 +99,8 @@ function view(it) {
     lastLaunch: Math.max(ov.lastLaunch || 0, it.lastPlayed || 0) || null,
     coverAppId: cover || null,
     coverHeader: (cover && state.headers[cover]) || null,
+    coverFile: ov.coverFile ? 'shelf://cover/' + encodeURIComponent(ov.coverFile) : null,
+    customCover: !!(ov.coverFile || ov.coverAppId),
   };
 }
 
@@ -162,7 +170,7 @@ async function doScan() {
   try {
     const res = await scanAll({ shell, progress: status });
     res.items = res.items.filter((it) => !isSelf(it));
-    state.items = res.items;
+    state.items = withManual(res.items);
     state.drives = res.drives;
     state.lastScan = Date.now();
     saveState();
@@ -267,6 +275,53 @@ function launch(it) {
   });
 }
 
+// ---------- already running? bring it to the front ----------
+// Starting an app that is already open often does nothing visible (its window stays
+// behind others or minimized). If one of its processes has a window, show that instead.
+function runningMatch(it) {
+  let dir = it.installDir || (it.exe && path.dirname(it.exe));
+  if (!dir && it.lnk) {
+    try {
+      const target = shell.readShortcutLink(it.lnk).target;
+      if (target) dir = path.dirname(target);
+    } catch {}
+  }
+  if (!dir) return null;
+  dir = path.normalize(dir).replace(/[\\/]+$/, '').toLowerCase();
+  const sysRoot = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase();
+  if (dir === sysRoot || dir.startsWith(sysRoot + path.sep)) return null; // system tools share one folder
+  if (SELF_DIRS.some((d) => (dir + path.sep).startsWith(d))) return null;
+  // a whole drive or "D:\Tools" is too broad – then only the exact exe counts
+  if (dir.split(path.sep).filter(Boolean).length >= 3) return { prefix: dir + path.sep };
+  return it.exe ? { exact: path.normalize(it.exe).toLowerCase() } : null;
+}
+function focusRunning(it) {
+  const m = runningMatch(it);
+  if (!m) return Promise.resolve(false);
+  const test = m.prefix ? `$_.Path.ToLower().StartsWith(${psQuote(m.prefix)})` : `$_.Path.ToLower() -eq ${psQuote(m.exact)}`;
+  const script = `$p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -and (${test}) } | Sort-Object StartTime -Descending | Select-Object -First 1
+if (-not $p) { 'none'; exit }
+$dll = ${psQuote(path.join(userDir, 'shelfwin-1.dll'))}
+if (-not (Test-Path -LiteralPath $dll)) { Add-Type -OutputAssembly $dll -OutputType Library -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class ShelfWin {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
+}
+'@ }
+Add-Type -LiteralPath $dll
+$h = $p.MainWindowHandle
+if ([ShelfWin]::IsIconic($h)) { [void][ShelfWin]::ShowWindow($h, 9) }
+[ShelfWin]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [ShelfWin]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+[void][ShelfWin]::SetForegroundWindow($h)
+'ok'`;
+  return new Promise((resolve) =>
+    execFile('powershell.exe', psEncoded(script), { windowsHide: true, timeout: 8000 }, (err, out) => resolve(!err && /ok/.test(String(out))))
+  );
+}
+
 // ---------- IPC ----------
 const find = (id) => state.items.find((i) => i.id === id);
 
@@ -280,12 +335,13 @@ ipcMain.handle('item:launch', async (_e, id) => {
   const it = find(id);
   if (!it) return { ok: false, error: 'Nie znaleziono' };
   try {
-    await launch(it);
+    const focused = await focusRunning(it);
+    if (!focused) await launch(it);
     const ov = (state.overrides[id] = state.overrides[id] || {});
     ov.lastLaunch = Date.now();
     ov.launches = (ov.launches || 0) + 1;
     saveState();
-    return { ok: true, item: view(it) };
+    return { ok: true, item: view(it), focused };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -310,6 +366,170 @@ ipcMain.handle('shelves:save', (_e, list) => {
   saveState();
   send('library:items', payload());
   return state.shelves;
+});
+
+// ---------- added by hand ----------
+// Games and apps Shelf didn't find: an .exe, a shortcut (.lnk) or an internet shortcut (.url, e.g. steam://)
+const ADD_EXT = /\.(exe|lnk|url|bat|cmd)$/i;
+const samePath = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+function withManual(list) {
+  const manual = (state.manual || []).filter((m) => !list.some((i) => i.id === m.id || (m.exe && samePath(i.exe, m.exe))));
+  return [...list, ...manual];
+}
+const psJson = (script) =>
+  new Promise((resolve) =>
+    execFile('powershell.exe', psEncoded(script), { windowsHide: true, timeout: 15e3 }, (err, out) => {
+      try {
+        resolve(err ? null : JSON.parse(String(out)));
+      } catch {
+        resolve(null);
+      }
+    })
+  );
+const psQuote = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+const prettyName = (file) =>
+  path
+    .basename(file, path.extname(file))
+    .replace(/[_.]+/g, ' ')
+    .replace(/(-|\s)(x64|x86|win64|win32|shipping)$/i, '')
+    .trim();
+
+// What would we add for this file? Name, launch target, folder, a guess at game vs app.
+async function inspectFile(file) {
+  if (typeof file !== 'string' || !ADD_EXT.test(file) || !fs.existsSync(file)) return null;
+  file = path.normalize(file);
+  const ext = path.extname(file).toLowerCase();
+  const info = { path: file, name: prettyName(file), category: 'app' };
+  let target = file;
+  if (ext === '.lnk') {
+    try {
+      target = shell.readShortcutLink(file).target || file;
+    } catch {}
+  } else if (ext === '.url') {
+    const txt = fs.readFileSync(file, 'utf8');
+    info.uri = (txt.match(/^URL=(.+)$/m) || [])[1]?.trim() || null;
+    if (!info.uri) return null;
+    const ico = (txt.match(/^IconFile=(.+)$/m) || [])[1]?.trim();
+    if (ico && fs.existsSync(ico)) info.iconPath = ico;
+    if (/^(steam|com\.epicgames\.launcher|uplay|goggalaxy|heroic|battlenet):/i.test(info.uri)) info.category = 'game';
+  }
+  if (/\.exe$/i.test(target) && fs.existsSync(target)) {
+    const v = await psJson(`$v=(Get-Item -LiteralPath ${psQuote(target)}).VersionInfo; @{p=$v.ProductName;d=$v.FileDescription} | ConvertTo-Json -Compress`);
+    // file description is usually the app's own name; product name can be the whole suite (e.g. 'Microsoft Windows')
+    const nice = [v?.d, v?.p]
+      .map((s) => String(s || '').replace(/[®™©]/g, '').trim())
+      .find((s) => s.length > 1 && !/^(launcher|game|application)$|operating system|system operacyjny/i.test(s));
+    if (nice && ext !== '.lnk') info.name = nice;
+    info.dir = path.dirname(target);
+    if (/\\(games?|steamapps|epic games|gog galaxy|riot games|ubisoft)\\/i.test(target)) info.category = 'game';
+  }
+  info.name = info.name.slice(0, 80);
+  return info;
+}
+
+async function addManual({ path: file, name, category }) {
+  const info = await inspectFile(file);
+  if (!info) return { error: 'file' };
+  const ext = path.extname(file).toLowerCase();
+  const exe = ext === '.exe' || ext === '.bat' || ext === '.cmd' ? file : null;
+  const dup = exe && state.items.find((i) => samePath(i.exe, exe) && !i.leftover);
+  if (dup) {
+    // already on the shelf – just make sure it is visible
+    const ov = (state.overrides[dup.id] ||= {});
+    if (ov.hidden || dup.autoHidden) ov.hidden = false;
+    saveState();
+    send('library:items', payload());
+    return { exists: true, item: view(dup) };
+  }
+  const it = {
+    id: 'manual:' + crypto.createHash('sha1').update(file.toLowerCase()).digest('hex').slice(0, 12),
+    name: String(name || info.name).trim().slice(0, 80) || info.name,
+    category: category === 'game' ? 'game' : 'app',
+    source: 'manual',
+    manual: true,
+    exe: exe || undefined,
+    lnk: ext === '.lnk' ? file : undefined,
+    uri: info.uri || undefined,
+    iconPath: info.iconPath || undefined,
+    installDir: info.dir || undefined,
+    installDate: Date.now(),
+    canLaunch: true,
+  };
+  state.manual = [...(state.manual || []).filter((m) => m.id !== it.id), it];
+  state.items = withManual(state.items.filter((i) => i.id !== it.id));
+  saveState();
+  send('library:items', payload());
+  extractIcons();
+  if (it.category === 'game') fetchCovers();
+  return { item: view(it) };
+}
+
+const ADD_FILTERS = () => [{ name: t('add.filter'), extensions: ['exe', 'lnk', 'url', 'bat', 'cmd'] }];
+ipcMain.handle('add:pick', async () => {
+  const r = await dialog.showOpenDialog(win, { title: t('add.title'), properties: ['openFile'], filters: ADD_FILTERS() });
+  return r.canceled || !r.filePaths[0] ? null : inspectFile(r.filePaths[0]);
+});
+ipcMain.handle('add:inspect', (_e, file) => inspectFile(file));
+ipcMain.handle('add:save', (_e, data) => (data && typeof data === 'object' ? addManual(data) : { error: 'file' }));
+ipcMain.handle('item:remove', (_e, id) => {
+  if (!String(id).startsWith('manual:')) return false;
+  state.manual = (state.manual || []).filter((m) => m.id !== id);
+  state.items = state.items.filter((i) => i.id !== id);
+  const f = state.overrides[id]?.coverFile;
+  if (f) fs.rm(path.join(COVER_DIR, f), () => {});
+  delete state.overrides[id];
+  saveState();
+  send('library:items', payload());
+  return true;
+});
+
+// ---------- custom covers ----------
+// Pick any Steam store entry, or a picture from disk (copied into %APPDATA%\Shelf\covers)
+ipcMain.handle('cover:search', async (_e, q) => {
+  q = String(q || '').trim().slice(0, 80);
+  if (!q) return [];
+  try {
+    const r = await fetch(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=US`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await r.json();
+    return (j.items || []).slice(0, 12).map((x) => ({ id: String(x.id), name: x.name }));
+  } catch {
+    return null; // offline
+  }
+});
+function setCover(id, patch) {
+  const it = find(id);
+  if (!it) return null;
+  const ov = (state.overrides[id] ||= {});
+  if (ov.coverFile && patch.coverFile !== ov.coverFile) fs.rm(path.join(COVER_DIR, ov.coverFile), () => {});
+  delete ov.coverFile;
+  delete ov.coverAppId;
+  Object.assign(ov, patch);
+  saveState();
+  if (ov.coverAppId) fetchCovers(); // header art for the "Recent" card
+  send('library:items', payload());
+  return view(it);
+}
+ipcMain.handle('cover:set', async (_e, id, choice) => {
+  if (!find(id)) return null;
+  if (choice === 'reset') return setCover(id, {});
+  if (choice === 'file') {
+    const r = await dialog.showOpenDialog(win, {
+      title: t('cover.file'),
+      properties: ['openFile'],
+      filters: [{ name: t('cover.images'), extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] }],
+    });
+    const src = !r.canceled && r.filePaths[0];
+    if (!src) return null;
+    if (fs.statSync(src).size > 20 * 1024 ** 2) return { error: 'big' };
+    fs.mkdirSync(COVER_DIR, { recursive: true });
+    const name = crypto.createHash('sha1').update(id).digest('hex').slice(0, 12) + '-' + Date.now().toString(36) + path.extname(src).toLowerCase();
+    fs.copyFileSync(src, path.join(COVER_DIR, name));
+    return setCover(id, { coverFile: name });
+  }
+  if (/^\d{1,10}$/.test(String(choice))) return setCover(id, { coverAppId: String(choice) });
+  return null;
 });
 
 // ---------- leftovers clean-up ----------
@@ -689,8 +909,10 @@ function debugCapture(w, before) {
       if (flag('--click')) {
         for (const sel of String(flag('--click')).split(',')) {
           await w.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(sel)})?.click()`);
+          await new Promise((r) => setTimeout(r, 250));
         }
       }
+      if (flag('--js')) await w.webContents.executeJavaScript(String(flag('--js'))).catch((e) => console.log('js error', e));
       if (flag('--query')) {
         await w.webContents.executeJavaScript(
           `(() => { const i = document.querySelector('input'); i.value = ${JSON.stringify(String(flag('--query')))}; i.dispatchEvent(new Event('input')); })()`
@@ -713,6 +935,11 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
   app.on('second-instance', showMain);
 
   app.whenReady().then(async () => {
+    protocol.handle('shelf', (req) => {
+      const u = new URL(req.url);
+      const f = u.hostname === 'cover' && path.join(COVER_DIR, path.basename(decodeURIComponent(u.pathname)));
+      return f && fs.existsSync(f) ? net.fetch(pathToFileURL(f).toString()) : new Response('', { status: 404 });
+    });
     loadState();
     if (flag('--lang')) I18N.setLang(flag('--lang')); // debug screenshots
     if (flag('--theme')) state.theme = flag('--theme');

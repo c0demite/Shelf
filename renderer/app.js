@@ -14,6 +14,7 @@ const SOURCES = {
   registry: { label: () => t('src.registry'), color: '#8a92a6' },
   shortcut: { label: () => t('src.shortcut'), color: '#e8a33d' },
   folder: { label: () => t('src.folder'), color: '#2fb6a3' },
+  manual: { label: () => t('src.manual'), color: '#f06b3c' },
 };
 const srcLabel = (s) => (SOURCES[s] ? SOURCES[s].label() : '');
 
@@ -159,14 +160,16 @@ function subLine(it) {
 const PLAY = '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="#fff" d="M8 5v14l11-7z"/></svg>';
 
 function gameCard(it) {
-  const cover = it.coverAppId
+  const cover = it.coverFile
+    ? `<img class="cover" src="${esc(it.coverFile)}" alt="">`
+    : it.coverAppId
     ? `<img class="cover" data-cover="${esc(it.coverAppId)}" data-step="0" src="${coverUrls(it.coverAppId)[0]}" alt="">`
     : '';
   const badge = it.leftover
     ? `<span class="badge warn">${esc(t('badge.leftover'))}</span>`
     : it.playing
     ? `<span class="badge live">${esc(t('playing'))}</span>`
-    : !['steam', 'registry', 'folder', 'shortcut'].includes(it.source)
+    : !['steam', 'registry', 'folder', 'shortcut', 'manual'].includes(it.source)
     ? `<span class="badge">${esc(srcLabel(it.source))}</span>`
     : '';
   return `<div class="card${it.canLaunch ? '' : ' nolaunch'}" tabindex="0" data-id="${esc(it.id)}" title="${esc(it.name)}">
@@ -202,10 +205,10 @@ function section(title, list, kind, opts = {}) {
 }
 
 function recentCard(it) {
-  const img = it.coverAppId;
+  const img = it.coverFile || (it.coverAppId ? headerUrl(it.coverAppId) : null);
   const sub = it.playing ? t('playing') : [fmtAgo(it.lastLaunch), it.playtime ? fmtPlay(it.playtime) : typeLabel(it).toLowerCase()].join(' · ');
   return `<div class="rc${img ? ' img' : ''}" tabindex="0" data-id="${esc(it.id)}">
-    ${img ? `<img class="bgimg" data-header src="${headerUrl(img)}" alt="">` : `<div class="halo"><img data-icon="${esc(it.id)}" alt="" hidden></div><div class="big">${iconSlot(it)}</div>`}
+    ${img ? `<img class="bgimg" data-header src="${esc(img)}" alt="">` : `<div class="halo"><img data-icon="${esc(it.id)}" alt="" hidden></div><div class="big">${iconSlot(it)}</div>`}
     <div class="meta">${img ? `<div class="ico-wrap">${iconSlot(it)}</div>` : ''}<div><div class="nm">${esc(it.name)}</div><div class="sb">${esc(sub)}</div></div></div>
     ${it.canLaunch ? `<div class="play">${PLAY}</div>` : ''}
   </div>`;
@@ -386,9 +389,19 @@ document.addEventListener(
       const card = img.closest('.rc');
       const it = card && byId(card.dataset.id);
       if (it) {
-        card.outerHTML = recentCard({ ...it, coverAppId: null });
+        card.outerHTML = recentCard({ ...it, coverAppId: null, coverFile: null });
         observeIcons();
       }
+      return;
+    }
+    if (img.matches?.('img.cv-img')) {
+      const s = +img.dataset.step + 1;
+      const u = coverUrls(img.dataset.cover);
+      if (s < u.length) {
+        img.dataset.step = s;
+        img.classList.toggle('wide', s === u.length - 1);
+        img.src = u[s];
+      } else img.closest('.cv')?.remove();
       return;
     }
     if (!img.matches?.('img.cover')) return;
@@ -457,6 +470,7 @@ function openMenu(id, x, y) {
     ${btn('launch', '▶', t('menu.launch'), it.canLaunch ? '' : 'disabled')}
     ${btn('fav', '★', t(it.fav ? 'menu.favOff' : 'menu.favOn'))}
     ${btn('cat', isGame ? '▣' : '◆', t(isGame ? 'menu.toApp' : 'menu.toGame'))}
+    ${isGame && !it.leftover ? btn('cover', '▨', t('menu.cover')) : ''}
     <div class="sep"></div>
     ${btn('folder', '⌂', t('menu.folder'), it.installDir || it.exe ? '' : 'disabled')}
     ${btn('hide', '◌', t(it.hidden ? 'menu.unhide' : 'menu.hide'))}
@@ -464,7 +478,7 @@ function openMenu(id, x, y) {
     <div class="m-sub">${esc(t('shelf.add'))}</div>
     ${shelves.map((s) => btn('shelf', (it.shelves || []).includes(s.id) ? '✓' : '', s.name, `data-shelf="${esc(s.id)}"`)).join('')}
     ${btn('shelf-new', '+', t('shelf.new') + '…')}
-    ${it.leftover ? `<div class="sep"></div>${btn('cleanup', '✕', t('menu.cleanup'), 'class="danger"')}` : it.uninstall || it.source === 'steam' ? `<div class="sep"></div>${btn('uninstall', '✕', t('menu.uninstall'), 'class="danger"')}` : ''}`;
+    ${it.leftover ? `<div class="sep"></div>${btn('cleanup', '✕', t('menu.cleanup'), 'class="danger"')}` : it.manual ? `<div class="sep"></div>${btn('remove', '✕', t('menu.remove'), 'class="danger"')}` : it.uninstall || it.source === 'steam' ? `<div class="sep"></div>${btn('uninstall', '✕', t('menu.uninstall'), 'class="danger"')}` : ''}`;
   menu.dataset.id = id;
   menu.hidden = false;
   const r = menu.getBoundingClientRect();
@@ -519,9 +533,176 @@ menu.addEventListener('click', async (e) => {
     }
     case 'cleanup':
       return cleanup([id]);
+    case 'cover':
+      return openCover(it);
+    case 'remove':
+      if (await api.removeItem(id)) toast(t('toast.removed', it.name));
+      return;
     case 'uninstall':
       await api.uninstall(id);
       return toast(t(it.source === 'steam' ? 'toast.steam' : 'toast.settings'));
+  }
+});
+
+// ---------- add a game or app by hand ----------
+const addDlg = $('#addDlg');
+let addInfo = null;
+let addType = 'app';
+function renderAddType() {
+  $('#addType').innerHTML = ['game', 'app']
+    .map((c) => `<button data-type="${c}" class="${addType === c ? 'active' : ''}">${esc(t('type.' + c))}</button>`)
+    .join('');
+}
+async function openAdd(info) {
+  if (!info) return toast(t('add.bad'), true);
+  addInfo = info;
+  addType = info.category;
+  addDlg.querySelector('.fp-txt b').textContent = info.path.split('\\').pop();
+  addDlg.querySelector('.fp-txt small').textContent = info.uri || info.path;
+  const ico = addDlg.querySelector('.fp-ico');
+  ico.hidden = true;
+  const input = addDlg.querySelector('input');
+  input.value = info.name;
+  renderAddType();
+  addDlg.hidden = false;
+  setTimeout(() => input.select(), 20);
+}
+const closeAdd = () => {
+  addDlg.hidden = true;
+  addInfo = null;
+};
+const pickToAdd = async () => {
+  const info = await api.pickToAdd();
+  if (info) openAdd(info);
+};
+async function saveAdd() {
+  if (!addInfo) return;
+  const name = addDlg.querySelector('input').value.trim() || addInfo.name;
+  const r = await api.addItem({ path: addInfo.path, name, category: addType });
+  closeAdd();
+  if (!r || r.error || !r.item) return toast(t('add.bad'), true);
+  toast(t(r.exists ? 'add.exists' : 'add.done', r.item.name));
+  // show it: jump to its tab and flash the card
+  view.cat = r.item.category === 'game' ? 'game' : 'app';
+  view.q = '';
+  view.source = null;
+  $('#search').value = '';
+  render();
+  const el = content.querySelector(`[data-id="${CSS.escape(r.item.id)}"]`);
+  if (el) {
+    el.scrollIntoView({ block: 'center' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1600);
+  }
+}
+$('#addBtn').addEventListener('click', pickToAdd);
+addDlg.addEventListener('click', (e) => {
+  if (e.target.closest('[data-pick]')) return pickToAdd();
+  const b = e.target.closest('[data-type]');
+  if (b) {
+    addType = b.dataset.type;
+    return renderAddType();
+  }
+  if (e.target.closest('[data-ok]')) return saveAdd();
+  if (e.target.closest('[data-cancel]') || e.target === addDlg) closeAdd();
+});
+addDlg.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') saveAdd();
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    closeAdd();
+  }
+});
+
+// drop an .exe or a shortcut anywhere on the window
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+document.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add('dropping');
+});
+document.addEventListener('dragover', (e) => hasFiles(e) && e.preventDefault());
+document.addEventListener('dragleave', (e) => {
+  if (hasFiles(e) && --dragDepth <= 0) {
+    dragDepth = 0;
+    document.body.classList.remove('dropping');
+  }
+});
+document.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dropping');
+  const f = e.dataTransfer?.files?.[0];
+  if (f) openAdd(await api.inspectFile(api.pathForFile(f)));
+});
+
+// ---------- custom cover ----------
+const coverDlg = $('#coverDlg');
+let coverFor = null;
+let coverSeq = 0;
+let coverTimer;
+function openCover(it) {
+  coverFor = it.id;
+  coverDlg.querySelector('.dlg-title').textContent = t('cover.title', it.name);
+  const input = coverDlg.querySelector('input');
+  input.value = it.name;
+  input.placeholder = t('cover.ph');
+  coverDlg.querySelector('[data-reset]').hidden = !it.customCover;
+  coverDlg.hidden = false;
+  searchCovers(it.name);
+  setTimeout(() => input.select(), 20);
+}
+async function searchCovers(q) {
+  const seq = ++coverSeq;
+  const g = $('#coverGrid');
+  if (!q.trim()) return (g.innerHTML = '');
+  g.innerHTML = `<div class="cv-msg">${esc(t('cover.searching'))}</div>`;
+  const list = await api.searchCovers(q);
+  if (seq !== coverSeq) return;
+  g.innerHTML =
+    list == null
+      ? `<div class="cv-msg">${esc(t('cover.offline'))}</div>`
+      : !list.length
+      ? `<div class="cv-msg">${esc(t('cover.none'))}</div>`
+      : list
+          .map(
+            (x) =>
+              `<button class="cv" data-app="${esc(x.id)}" title="${esc(x.name)}"><span class="cv-art"><img class="cv-img" data-cover="${esc(x.id)}" data-step="0" src="${coverUrls(x.id)[0]}" alt=""></span><span class="cv-name">${esc(x.name)}</span></button>`
+          )
+          .join('');
+}
+const closeCover = () => {
+  coverDlg.hidden = true;
+  coverFor = null;
+  coverSeq++;
+};
+async function chooseCover(choice) {
+  const id = coverFor;
+  closeCover();
+  const r = await api.setCover(id, choice);
+  if (!r) return;
+  if (r.error) return toast(t('cover.big'), true);
+  replace(r);
+  render();
+  toast(t(choice === 'reset' ? 'cover.restored' : 'cover.set'));
+}
+coverDlg.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-app]');
+  if (b) return chooseCover(b.dataset.app);
+  if (e.target.closest('[data-file]')) return chooseCover('file');
+  if (e.target.closest('[data-reset]')) return chooseCover('reset');
+  if (e.target.closest('[data-cancel]') || e.target === coverDlg) closeCover();
+});
+coverDlg.querySelector('input').addEventListener('input', (e) => {
+  clearTimeout(coverTimer);
+  coverTimer = setTimeout(() => searchCovers(e.target.value), 350);
+});
+coverDlg.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    closeCover();
   }
 });
 
@@ -870,7 +1051,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   // start typing anywhere = search
-  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && document.activeElement.tagName !== 'INPUT' && e.key !== ' ') s.focus();
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && document.activeElement.tagName !== 'INPUT' && e.key !== ' ' && !document.querySelector('.dialog:not([hidden])')) s.focus();
 });
 
 $('#scanBtn').addEventListener('click', () => api.scan());

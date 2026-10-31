@@ -34,6 +34,9 @@ After a few years every PC turns into an attic. Games live in four different lau
 - **Games and apps, sorted for you.** Shelf tells games from apps on its own. If it gets one wrong, fix it with a right-click.
 - **Real cover art.** Tall covers from the Steam store, also for games you didn't buy on Steam. Apps get their real, sharp Windows icons.
 - **Quick launcher.** Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> anywhere, type two letters, hit <kbd>Enter</kbd>. Initials work too: `ms` finds *Marvel's Spider-Man*.
+- **Add anything by hand.** Shelf missed something? Click **Add** or drop an .exe or a shortcut onto the window.
+- **Pick your own cover.** Search Steam for any cover art, or use a picture from your disk.
+- **Already open? It comes to the front.** Launching an app that is already running shows its window instead of doing nothing.
 - **Your own shelves.** Group anything into collections such as *Co-op nights* or *To finish*.
 - **Playtime for every game.** Shelf notices when a game is running, however you started it, and counts the hours – not only for Steam.
 - **Recently played, favorites, hidden.** Pick up where you left off, star what matters, hide what doesn't.
@@ -132,8 +135,8 @@ All text lives in [`renderer/i18n.js`](renderer/i18n.js). To add a language, cop
 - [x] Automatic updates
 - [ ] Signed installer
 - [ ] Heroic, itch.io, Battle.net and EA app libraries
-- [ ] Manually add a game or app that Shelf didn't find
-- [ ] Custom cover art
+- [x] Manually add a game or app that Shelf didn't find
+- [x] Custom cover art
 - [ ] More languages
 
 Ideas and bug reports go to [Issues](https://github.com/c0demite/Shelf/issues).

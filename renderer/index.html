@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://*.steamstatic.com https://steamcdn-a.akamaihd.net"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: shelf: https://*.steamstatic.com https://steamcdn-a.akamaihd.net"
     />
     <title>Shelf</title>
     <link rel="stylesheet" href="fonts.css" />
@@ -50,6 +50,10 @@
           </div>
           <div class="views shelves" id="shelves"></div>
           <div class="tools">
+            <button class="add-btn" id="addBtn" data-i18n-title="add.title">
+              <svg width="14" height="14" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+              <span data-i18n="add.btn"></span>
+            </button>
             <div class="dd" id="source"></div>
             <div class="dd" id="sort"></div>
             <div class="seg" id="mode">
@@ -112,6 +116,36 @@
       </div>
     </div>
 
+    <div class="dialog" id="addDlg" hidden>
+      <div class="dlg add-dlg">
+        <div class="dlg-title" data-i18n="add.title"></div>
+        <button class="file-pick" data-pick>
+          <img class="fp-ico" alt="" />
+          <span class="fp-txt"><b></b><small></small></span>
+          <span class="fp-act" data-i18n="add.change"></span>
+        </button>
+        <label class="fld"><span data-i18n="add.name"></span><input type="text" maxlength="80" spellcheck="false" autocomplete="off" /></label>
+        <div class="fld"><span data-i18n="add.type"></span><div class="seg lang" id="addType"></div></div>
+        <div class="dlg-btns"><span class="dlg-hint" data-i18n="add.hint"></span><button class="btn ghost" data-cancel data-i18n="btn.cancel"></button><button class="btn primary" data-ok data-i18n="add.ok"></button></div>
+      </div>
+    </div>
+    <div class="dialog" id="coverDlg" hidden>
+      <div class="dlg cover-dlg">
+        <div class="dlg-title"></div>
+        <label class="find cover-find">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
+          <input type="search" spellcheck="false" autocomplete="off" />
+        </label>
+        <div class="cover-grid" id="coverGrid"></div>
+        <div class="dlg-btns">
+          <button class="btn" data-file><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg><span data-i18n="cover.file"></span></button>
+          <button class="btn ghost" data-reset data-i18n="cover.reset"></button>
+          <span class="grow"></span>
+          <button class="btn ghost" data-cancel data-i18n="btn.cancel"></button>
+        </div>
+      </div>
+    </div>
+    <div class="drop-hint"><div><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span data-i18n="add.drop"></span></div></div>
     <div class="menu" id="menu" hidden></div>
     <div class="toast" id="toast" hidden></div>
 
