@@ -10,7 +10,7 @@ const PS_SCRIPT = String.raw`
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
 $paths = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*')
-$u = foreach ($p in $paths) { Get-ItemProperty $p | Where-Object { $_.DisplayName } | ForEach-Object { [pscustomobject]@{ key=$_.PSChildName; name=$_.DisplayName; publisher=$_.Publisher; dir=$_.InstallLocation; icon=$_.DisplayIcon; uninstall=$_.UninstallString; size=$_.EstimatedSize; date=$_.InstallDate; sys=$_.SystemComponent; parent=$_.ParentKeyName; rel=$_.ReleaseType } } }
+$u = foreach ($p in $paths) { Get-ItemProperty $p | Where-Object { $_.DisplayName } | ForEach-Object { [pscustomobject]@{ key=$_.PSChildName; reg=($_.PSPath -replace '^.*?Registry::',''); name=$_.DisplayName; publisher=$_.Publisher; dir=$_.InstallLocation; icon=$_.DisplayIcon; uninstall=$_.UninstallString; size=$_.EstimatedSize; date=$_.InstallDate; sys=$_.SystemComponent; parent=$_.ParentKeyName; rel=$_.ReleaseType } } }
 $gog = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games\*' | ForEach-Object { [pscustomobject]@{ id=$_.gameID; name=$_.gameName; exe=$_.exe; dir=$_.path; workDir=$_.workingDir } }
 $ubi = Get-ChildItem 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs' | ForEach-Object { [pscustomobject]@{ id=$_.PSChildName; dir=(Get-ItemProperty $_.PSPath).InstallDir } }
 $start = Get-StartApps | Where-Object { $_.AppID -like '*!*' } | ForEach-Object { [pscustomobject]@{ name=$_.Name; id=$_.AppID } }
@@ -345,6 +345,7 @@ function registryItems(list) {
       leftover: missing || undefined,
       autoHidden: missing || undefined,
       missingDir: missing ? String(r.dir).trim() : undefined,
+      regKey: missing && r.reg ? String(r.reg) : undefined,
     });
   }
   return out;

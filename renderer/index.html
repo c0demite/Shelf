@@ -30,6 +30,7 @@
           <input id="search" type="search" data-i18n-ph="search.ph" autocomplete="off" spellcheck="false" />
           <kbd>Ctrl</kbd><kbd>F</kbd>
         </label>
+        <button class="upd-pill" id="updPill" hidden></button>
         <button class="icon-btn" id="setBtn" data-i18n-title="set.title">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
           <span class="dot" id="scanDot" hidden></span>
@@ -95,12 +96,17 @@
           <span></span>
         </button>
       </div>
+      <div class="pop-row">
+        <div><div class="pop-lbl" data-i18n="set.updates"></div><div class="pop-hint" id="updText"></div></div>
+        <button class="btn" id="updBtn" hidden></button>
+      </div>
       <div class="pop-foot" data-i18n="brand.tagline"></div>
     </div>
 
     <div class="dialog" id="dialog" hidden>
       <div class="dlg">
         <div class="dlg-title"></div>
+        <p class="dlg-text" hidden></p>
         <input type="text" maxlength="60" spellcheck="false" autocomplete="off" />
         <div class="dlg-btns"><button class="btn ghost" data-cancel></button><button class="btn primary" data-ok></button></div>
       </div>

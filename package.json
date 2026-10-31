@@ -1,7 +1,7 @@
 {
   "name": "shelf",
   "productName": "Shelf",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Everything you own, on one shelf. Finds every game and app on your Windows PC and puts them in one place.",
   "homepage": "https://github.com/c0demite/Shelf",
   "repository": {
@@ -56,10 +56,20 @@
       "shortcutName": "Shelf",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "c0demite",
+        "repo": "Shelf"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^45.2.1",
     "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }

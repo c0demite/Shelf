@@ -37,9 +37,10 @@ After a few years every PC turns into an attic. Games live in four different lau
 - **Your own shelves.** Group anything into collections such as *Co-op nights* or *To finish*.
 - **Playtime for every game.** Shelf notices when a game is running, however you started it, and counts the hours – not only for Steam.
 - **Recently played, favorites, hidden.** Pick up where you left off, star what matters, hide what doesn't.
-- **Leftovers.** Finds empty folders and dead registry entries left behind by uninstalled games.
+- **Leftover clean-up.** Finds dead "installed program" entries and empty folders left behind by uninstalled games, and removes them in one click (with a registry backup first).
 - **Dark and light theme**, or follow Windows.
 - **English and Polish.** Adding a language is a single file – see [Translations](#translations).
+- **Updates itself.** New versions download in the background and install on the next restart.
 - **Lives in the tray.** Closing the window keeps Shelf in the tray so the shortcut keeps working; it can start with Windows.
 - **Private by design.** No account, no telemetry, no ads. Your library never leaves your PC.
 
@@ -128,7 +129,8 @@ All text lives in [`renderer/i18n.js`](renderer/i18n.js). To add a language, cop
 
 ## Roadmap
 
-- [ ] Signed installer and automatic updates
+- [x] Automatic updates
+- [ ] Signed installer
 - [ ] Heroic, itch.io, Battle.net and EA app libraries
 - [ ] Manually add a game or app that Shelf didn't find
 - [ ] Custom cover art

@@ -312,6 +312,120 @@ ipcMain.handle('shelves:save', (_e, list) => {
   return state.shelves;
 });
 
+// ---------- leftovers clean-up ----------
+// Removes dead "installed program" entries (registry) and moves empty Steam
+// folders to the Recycle Bin. Registry keys are exported to a .reg backup first.
+const UNINSTALL_KEY_RE =
+  /^HKEY_(LOCAL_MACHINE|CURRENT_USER)\\SOFTWARE\\(WOW6432Node\\)?Microsoft\\Windows\\CurrentVersion\\Uninstall\\[^"\\]+$/i;
+const run = (cmd, args) =>
+  new Promise((resolve) => execFile(cmd, args, { windowsHide: true, timeout: 120e3 }, (err, out) => resolve({ ok: !err, out: String(out || '') })));
+const regExists = async (key) => (await run('reg', ['query', key])).ok;
+const psEncoded = (script) => ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+
+const TRASH_LIMIT = 2 * 1024 ** 3; // 2 GB
+function dirSize(dir, cap) {
+  let total = 0;
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (total > cap) return;
+      const p = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) walk(p);
+        else total += fs.statSync(p).size;
+      } catch {}
+    }
+  };
+  try {
+    walk(dir);
+  } catch {}
+  return total;
+}
+
+async function removeLeftovers(ids) {
+  const list = ids.map(find).filter((it) => it && it.leftover);
+  const tooBig = [];
+  const backupDir = path.join(userDir, 'backups', 'leftovers-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
+  const keys = list.filter((it) => it.regKey && UNINSTALL_KEY_RE.test(it.regKey));
+  if (keys.length) {
+    fs.mkdirSync(backupDir, { recursive: true });
+    for (const it of keys) await run('reg', ['export', it.regKey, path.join(backupDir, it.regKey.split('\\').pop().replace(/[^\w.-]+/g, '_') + '.reg'), '/y']);
+    // per-user entries need no admin rights
+    for (const it of keys.filter((k) => /^HKEY_CURRENT_USER/i.test(k.regKey))) await run('reg', ['delete', it.regKey, '/f']);
+    // machine-wide entries: one elevated call, so Windows asks only once
+    const machine = keys.filter((k) => /^HKEY_LOCAL_MACHINE/i.test(k.regKey));
+    if (machine.length) {
+      const cmdLine = '/c ' + machine.map((k) => `reg delete "${k.regKey}" /f`).join(' & ');
+      await run('powershell.exe', psEncoded(`Start-Process cmd.exe -ArgumentList '${cmdLine.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden`));
+    }
+  }
+  const removed = new Set();
+  for (const it of list) {
+    let ok = true;
+    if (it.regKey) ok = UNINSTALL_KEY_RE.test(it.regKey) && !(await regExists(it.regKey));
+    // empty Steam folder of an uninstalled game -> Recycle Bin (can be restored)
+    if (ok && it.source === 'steam' && it.installDir && /\\steamapps\\common\\[^\\]+\\?$/i.test(it.installDir) && fs.existsSync(it.installDir)) {
+      // a huge folder could skip the Recycle Bin and be gone for good – leave those to the user
+      if (dirSize(it.installDir, TRASH_LIMIT) > TRASH_LIMIT) {
+        tooBig.push(it.installDir);
+        continue;
+      }
+      try {
+        await shell.trashItem(it.installDir);
+      } catch {
+        ok = false;
+      }
+    }
+    // a leftover with nothing we know how to remove (old cache entry) just drops off the list
+    if (ok) removed.add(it.id);
+  }
+  state.items = state.items.filter((i) => !removed.has(i.id));
+  saveState();
+  send('library:items', payload());
+  tooBig.forEach((d) => shell.openPath(d));
+  return { removed: removed.size, total: list.length, tooBig: tooBig.length, backup: keys.length ? backupDir : null };
+}
+ipcMain.handle('leftover:remove', (_e, ids) => removeLeftovers(Array.isArray(ids) ? ids.map(String) : []));
+ipcMain.handle('app:openPath', (_e, p) => {
+  // only our own backup folders
+  if (typeof p === 'string' && path.resolve(p).startsWith(path.join(userDir, 'backups'))) shell.openPath(p);
+});
+
+// ---------- updates ----------
+// Installed builds check GitHub releases, download in the background and install on restart.
+let updateState = { status: 'idle' };
+let updater = null;
+const setUpdate = (patch) => {
+  updateState = { ...updateState, ...patch };
+  send('update:status', updateStatus());
+};
+const updateStatus = () => ({ ...updateState, current: app.getVersion(), enabled: app.isPackaged });
+function initUpdates() {
+  if (!app.isPackaged || updater) return;
+  updater = require('electron-updater').autoUpdater;
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.on('checking-for-update', () => setUpdate({ status: 'checking', error: null }));
+  updater.on('update-available', (i) => setUpdate({ status: 'downloading', version: i.version, percent: 0 }));
+  updater.on('update-not-available', () => setUpdate({ status: 'latest' }));
+  updater.on('download-progress', (p) => setUpdate({ percent: Math.round(p.percent) }));
+  updater.on('update-downloaded', (i) => {
+    setUpdate({ status: 'ready', version: i.version });
+    refreshTrayMenu();
+  });
+  updater.on('error', (e) => setUpdate({ status: 'error', error: String((e && e.message) || e).slice(0, 200) }));
+  const check = () => updater.checkForUpdates().catch(() => {});
+  setTimeout(check, 10e3);
+  setInterval(check, 6 * 3600e3);
+}
+function installUpdate() {
+  if (!updater || updateState.status !== 'ready') return;
+  quitting = true;
+  updater.quitAndInstall(true, true); // silent, start Shelf again afterwards
+}
+ipcMain.handle('update:get', () => updateStatus());
+ipcMain.handle('update:check', () => (updater ? updater.checkForUpdates().catch(() => {}) && true : false));
+ipcMain.handle('update:install', () => installUpdate());
+
 ipcMain.handle('item:openFolder', (_e, id) => {
   const it = find(id);
   if (!it) return false;
@@ -538,6 +652,7 @@ function createTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   const menu = () =>
     Menu.buildFromTemplate([
+      ...(updateState.status === 'ready' ? [{ label: t('tray.update', updateState.version), click: installUpdate }, { type: 'separator' }] : []),
       { label: t('tray.open'), click: showMain },
       { label: t('tray.quick') + (hotkey ? `\t${I18N.keyLabel(hotkey)}` : ''), click: showQuick },
       { label: t('tray.rescan'), click: () => doScan() },
@@ -629,6 +744,7 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
     createQuick();
     extractIcons(); // icons for the cached list while the fresh scan runs
     doScan();
+    initUpdates();
     setTimeout(trackPlaytime, 15e3);
     setInterval(trackPlaytime, PLAY_TICK);
   });

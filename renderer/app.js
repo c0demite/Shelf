@@ -108,6 +108,7 @@ function applyI18n() {
   ).join('');
   renderHotkey();
   setScanning(scanning);
+  renderUpdate();
 }
 
 // ---------- filtering ----------
@@ -294,6 +295,7 @@ function render() {
     const tApps = view.cat === 'all' ? t('sec.apps') : t('sec.ofApps', catTitle(view.cat));
     html = section(tGames, games, 'games') + section(tApps, apps, 'apps');
   }
+  if (view.cat === 'leftover') html = `<div class="cleanup"><div><b>${esc(t('left.bannerTitle'))}</b><span>${esc(t('left.bannerText'))}</span></div><button class="btn primary" data-cleanup-all>${esc(t('left.cleanAll', list.length))}</button></div>` + html;
   content.innerHTML = html;
   renderCounts();
   observeIcons();
@@ -462,7 +464,7 @@ function openMenu(id, x, y) {
     <div class="m-sub">${esc(t('shelf.add'))}</div>
     ${shelves.map((s) => btn('shelf', (it.shelves || []).includes(s.id) ? '✓' : '', s.name, `data-shelf="${esc(s.id)}"`)).join('')}
     ${btn('shelf-new', '+', t('shelf.new') + '…')}
-    ${it.uninstall || it.source === 'steam' ? `<div class="sep"></div>${btn('uninstall', '✕', t('menu.uninstall'), 'class="danger"')}` : ''}`;
+    ${it.leftover ? `<div class="sep"></div>${btn('cleanup', '✕', t('menu.cleanup'), 'class="danger"')}` : it.uninstall || it.source === 'steam' ? `<div class="sep"></div>${btn('uninstall', '✕', t('menu.uninstall'), 'class="danger"')}` : ''}`;
   menu.dataset.id = id;
   menu.hidden = false;
   const r = menu.getBoundingClientRect();
@@ -515,10 +517,57 @@ menu.addEventListener('click', async (e) => {
       saveShelves(shelves.filter((x) => x !== s));
       return toast(t('shelf.deleted', s.name));
     }
+    case 'cleanup':
+      return cleanup([id]);
     case 'uninstall':
       await api.uninstall(id);
       return toast(t(it.source === 'steam' ? 'toast.steam' : 'toast.settings'));
   }
+});
+
+// ---------- leftovers clean-up ----------
+async function cleanup(ids) {
+  if (!ids.length) return;
+  const yes = await askName(t('left.confirmTitle', ids.length), null, t('left.confirmText', ids.length), t('left.remove'));
+  if (!yes) return;
+  toast(t('left.working'));
+  const r = await api.removeLeftovers(ids);
+  if (!r.removed) toast(t('left.none'), true);
+  else if (r.removed < r.total) toast(t('left.partial', r.removed, r.total), true);
+  else toast(t('left.done', r.removed));
+}
+
+// ---------- updates ----------
+let upd = { status: 'idle' };
+function renderUpdate() {
+  const st = upd.status;
+  const hint = !upd.enabled
+    ? t('upd.dev')
+    : st === 'checking'
+    ? t('upd.checking')
+    : st === 'downloading'
+    ? t('upd.downloading', upd.version, upd.percent || 0)
+    : st === 'ready'
+    ? t('upd.ready', upd.version)
+    : st === 'error'
+    ? t('upd.error')
+    : st === 'latest'
+    ? t('upd.latest')
+    : '';
+  $('#updText').textContent = [t('upd.version', upd.current || ''), hint].filter(Boolean).join(' · ');
+  const b = $('#updBtn');
+  b.hidden = !upd.enabled;
+  b.disabled = st === 'checking' || st === 'downloading';
+  b.textContent = t(st === 'ready' ? 'upd.install' : 'upd.check');
+  b.classList.toggle('primary', st === 'ready');
+  $('#updPill').hidden = st !== 'ready';
+  $('#updPill').textContent = t('upd.pill');
+}
+$('#updBtn').addEventListener('click', () => (upd.status === 'ready' ? api.installUpdate() : api.checkUpdate()));
+$('#updPill').addEventListener('click', () => api.installUpdate());
+api.on('update:status', (u) => {
+  upd = u;
+  renderUpdate();
 });
 
 // ---------- shelves (collections) ----------
@@ -557,25 +606,37 @@ function openShelfMenu(sid, x, y) {
 }
 
 // Small name dialog (Electron has no window.prompt)
-function askName(title, value) {
+function askName(title, value, confirmText, okLabel) {
   return new Promise((resolve) => {
     const dlg = $('#dialog');
     const input = dlg.querySelector('input');
+    const text = dlg.querySelector('.dlg-text');
+    text.hidden = !confirmText;
+    text.textContent = confirmText || '';
+    input.hidden = !!confirmText;
     dlg.querySelector('.dlg-title').textContent = title;
-    dlg.querySelector('[data-ok]').textContent = t(value ? 'btn.save' : 'btn.create');
+    const ok = dlg.querySelector('[data-ok]');
+    ok.textContent = okLabel || t(value ? 'btn.save' : 'btn.create');
+    ok.classList.toggle('danger', !!confirmText);
     dlg.querySelector('[data-cancel]').textContent = t('btn.cancel');
     input.placeholder = t('shelf.ph');
     input.value = value || '';
     dlg.hidden = false;
-    setTimeout(() => input.select(), 20);
+    setTimeout(() => (confirmText ? ok.focus() : input.select()), 20);
     const done = (v) => {
       dlg.hidden = true;
-      dlg.onclick = input.onkeydown = null;
-      resolve(v ? v.trim().slice(0, 60) || null : null);
+      dlg.onclick = input.onkeydown = dlg.onkeydown = null;
+      resolve(confirmText ? v === true : v ? v.trim().slice(0, 60) || null : null);
     };
     dlg.onclick = (e) => {
-      if (e.target.closest('[data-ok]')) done(input.value);
+      if (e.target.closest('[data-ok]')) done(confirmText ? true : input.value);
       else if (e.target.closest('[data-cancel]') || e.target === dlg) done(null);
+    };
+    dlg.onkeydown = (e) => {
+      if (confirmText && e.key === 'Escape') {
+        e.stopPropagation();
+        done(null);
+      }
     };
     input.onkeydown = (e) => {
       if (e.key === 'Enter') done(input.value);
@@ -725,6 +786,7 @@ function renderHotkey() {
 // ---------- events ----------
 const content = $('#content');
 content.addEventListener('click', (e) => {
+  if (e.target.closest('[data-cleanup-all]')) return cleanup(items.filter((i) => i.leftover).map((i) => i.id));
   const more = e.target.closest('[data-goto]');
   if (more) return setCat(more.dataset.goto);
   const el = e.target.closest('[data-id]');
@@ -863,7 +925,8 @@ auto.addEventListener('change', async () => {
 });
 
 (async () => {
-  const [p, k] = await Promise.all([api.getLibrary(), api.hotkey()]);
+  const [p, k, u] = await Promise.all([api.getLibrary(), api.hotkey(), api.getUpdate()]);
+  upd = u;
   I18N.setLang(p.lang);
   Theme.set(p.theme);
   hotkey = k;

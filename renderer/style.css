@@ -135,6 +135,22 @@ kbd {
 .seg button:hover { color: var(--ink); }
 .seg button.active { background: var(--raise); color: var(--ink); }
 
+/* leftovers banner, update pill */
+.cleanup {
+  display: flex; align-items: center; gap: 18px; margin-top: 22px; padding: 16px 18px; border-radius: 16px;
+  background: var(--paper); border: 1px solid var(--line);
+}
+.cleanup > div { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.cleanup b { font-weight: 600; }
+.cleanup span { color: var(--ink-2); font-size: 13px; }
+.dlg-text { margin: -4px 0 4px; color: var(--ink-2); line-height: 1.5; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.upd-pill {
+  height: 38px; padding: 0 14px; border-radius: 999px; border: 0; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px;
+  box-shadow: 0 6px 18px -6px #f06b3c99;
+}
+.upd-pill:hover { filter: brightness(1.08); }
+
 /* custom shelves */
 .shelves { padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--line); flex-wrap: wrap; }
 .shelves .add { color: var(--mute); border: 1px dashed var(--line-2); }
@@ -349,3 +365,5 @@ kbd {
   .find { width: 160px; }
   .wrap { padding: 8px 24px 60px; }
 }
+
+[hidden] { display: none !important; }
