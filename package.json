@@ -1,13 +1,65 @@
 {
-  "name": "app-hub",
-  "version": "0.1.0",
-  "description": "Shelf – everything you own, on one shelf",
+  "name": "shelf",
+  "productName": "Shelf",
+  "version": "0.2.0",
+  "description": "Everything you own, on one shelf. Finds every game and app on your Windows PC and puts them in one place.",
+  "homepage": "https://github.com/c0demite/Shelf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c0demite/Shelf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/c0demite/Shelf/issues"
+  },
+  "author": "c0demite",
+  "license": "MIT",
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win --x64",
+    "pack": "electron-builder --win --x64 --dir"
+  },
+  "build": {
+    "appId": "io.github.c0demite.shelf",
+    "productName": "Shelf",
+    "copyright": "Copyright © 2026 c0demite",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "artifactName": "Shelf-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Shelf",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    }
   },
   "devDependencies": {
-    "electron": "^45.2.1"
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
   }
 }

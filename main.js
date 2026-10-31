@@ -14,6 +14,22 @@ const flag = (name) => {
   return i >= 0 ? argv[i + 1] || true : null;
 };
 
+app.setAppUserModelId('io.github.c0demite.shelf');
+
+// Early builds were called "App Hub" and kept data in %APPDATA%\app-hub – carry it over once
+(function migrateOldData() {
+  const now = app.getPath('userData');
+  const old = path.join(app.getPath('appData'), 'app-hub');
+  if (fs.existsSync(path.join(now, 'state.json')) || !fs.existsSync(path.join(old, 'state.json'))) return;
+  try {
+    fs.mkdirSync(now, { recursive: true });
+    fs.copyFileSync(path.join(old, 'state.json'), path.join(now, 'state.json'));
+    if (fs.existsSync(path.join(old, 'icons'))) fs.cpSync(path.join(old, 'icons'), path.join(now, 'icons'), { recursive: true });
+  } catch (e) {
+    console.error('migration failed', e);
+  }
+})();
+
 // Debug runs (--dump / --screenshot) use their own profile so they never clash with a running Shelf
 if (flag('--dump') || flag('--screenshot')) {
   const real = path.join(app.getPath('userData'), 'state.json');
@@ -85,6 +101,11 @@ const payload = () => ({
 });
 
 // ---------- scanning ----------
+// Shelf should not list itself (installed copy, or Electron when run from source)
+const SELF_DIRS = [path.dirname(process.execPath), __dirname].map((d) => d.toLowerCase() + path.sep);
+const isSelf = (it) =>
+  [it.installDir, it.exe].some((p) => p && SELF_DIRS.some((d) => (p.toLowerCase() + path.sep).startsWith(d)));
+
 async function doScan() {
   if (scanning) return;
   scanning = true;
@@ -95,6 +116,7 @@ async function doScan() {
   status('scan.start');
   try {
     const res = await scanAll({ shell, progress: status });
+    res.items = res.items.filter((it) => !isSelf(it));
     state.items = res.items;
     state.drives = res.drives;
     state.lastScan = Date.now();
