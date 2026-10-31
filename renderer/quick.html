@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:" />
+    <title>Shelf</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="quick.css" />
+  </head>
+  <body>
+    <div class="panel" id="panel">
+      <div class="bar">
+        <svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="13" width="7.5" height="24" rx="2.6" fill="#f2ede3"/><rect x="18" y="7" width="7.5" height="30" rx="2.6" fill="#f06b3c"/><rect x="29.5" y="15" width="7.5" height="22" rx="2.6" fill="#f2ede3" transform="rotate(16 33.25 37)"/><rect x="5" y="38.5" width="38" height="3.2" rx="1.6" fill="#f2ede3"/></svg>
+        <input id="q" type="text" data-i18n-ph="q.ph" autocomplete="off" spellcheck="false" />
+        <button class="open-main" id="openMain" data-i18n="q.open"></button>
+      </div>
+      <div class="results" id="results"></div>
+      <div class="foot" id="foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> <i data-i18n="q.select"></i></span>
+        <span><kbd>Enter</kbd> <i data-i18n="q.launch"></i></span>
+        <span><kbd>Shift</kbd>+<kbd>Enter</kbd> <i data-i18n="q.folder"></i></span>
+        <span><kbd>Esc</kbd> <i data-i18n="q.close"></i></span>
+      </div>
+    </div>
+    <script src="i18n.js"></script>
+    <script src="quick.js"></script>
+  </body>
+</html>

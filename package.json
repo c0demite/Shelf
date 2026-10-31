@@ -1,0 +1,13 @@
+{
+  "name": "app-hub",
+  "version": "0.1.0",
+  "description": "Shelf – everything you own, on one shelf",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.2.1"
+  }
+}

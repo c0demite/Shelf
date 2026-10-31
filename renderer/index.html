@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://*.steamstatic.com https://steamcdn-a.akamaihd.net"
+    />
+    <title>Shelf</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="13" width="7.5" height="24" rx="2.6" fill="#f2ede3"/><rect x="18" y="7" width="7.5" height="30" rx="2.6" fill="#f06b3c"/><rect x="29.5" y="15" width="7.5" height="22" rx="2.6" fill="#f2ede3" transform="rotate(16 33.25 37)"/><rect x="5" y="38.5" width="38" height="3.2" rx="1.6" fill="#f2ede3"/></svg>
+        Shelf
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button data-cat="all"><span data-i18n="tab.all"></span><span class="n" data-count="all"></span></button>
+        <button data-cat="game"><span data-i18n="tab.game"></span><span class="n" data-count="game"></span></button>
+        <button data-cat="app"><span data-i18n="tab.app"></span><span class="n" data-count="app"></span></button>
+        <button data-cat="fav"><span data-i18n="tab.fav"></span><span class="n" data-count="fav"></span></button>
+      </nav>
+
+      <div class="top-r">
+        <label class="find">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
+          <input id="search" type="search" data-i18n-ph="search.ph" autocomplete="off" spellcheck="false" />
+          <kbd>Ctrl</kbd><kbd>F</kbd>
+        </label>
+        <button class="icon-btn" id="setBtn" data-i18n-title="set.title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+          <span class="dot" id="scanDot" hidden></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="scroll" id="scroll">
+      <main class="wrap">
+        <div class="hello" id="hello"></div>
+
+        <div class="toolbar">
+          <div class="views" id="views">
+            <button data-cat="recent"><span data-i18n="tab.recent"></span><span class="n" data-count="recent"></span></button>
+            <button data-cat="hidden"><span data-i18n="tab.hidden"></span><span class="n" data-count="hidden"></span></button>
+            <button data-cat="leftover"><span data-i18n="tab.leftover"></span><span class="n" data-count="leftover"></span></button>
+          </div>
+          <div class="tools">
+            <div class="dd" id="source"></div>
+            <div class="dd" id="sort"></div>
+            <div class="seg" id="mode">
+              <button data-mode="grid" data-i18n-title="view.grid">
+                <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+              </button>
+              <button data-mode="list" data-i18n-title="view.list">
+                <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M4 5h16v2H4zM4 11h16v2H4zM4 17h16v2H4z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <section id="content"></section>
+      </main>
+    </div>
+
+    <div class="pop" id="settings" hidden>
+      <div class="pop-title" data-i18n="set.title"></div>
+
+      <div class="pop-row">
+        <div class="pop-lbl" data-i18n="set.lang"></div>
+        <div class="seg lang" id="lang"></div>
+      </div>
+
+      <label class="pop-row toggle">
+        <div><div class="pop-lbl" data-i18n="set.auto"></div><div class="pop-hint" data-i18n="set.autoHint"></div></div>
+        <input type="checkbox" id="autostart" /><span class="sw"></span>
+      </label>
+
+      <div class="pop-row">
+        <div><div class="pop-lbl" data-i18n="set.shortcut"></div><div class="pop-hint" id="hotkeyHint"></div></div>
+      </div>
+
+      <div class="pop-row">
+        <div><div class="pop-lbl" data-i18n="set.library"></div><div class="pop-hint" id="scanText"></div></div>
+        <button class="btn" id="scanBtn">
+          <svg class="spin-ico" viewBox="0 0 24 24" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"/></svg>
+          <span></span>
+        </button>
+      </div>
+      <div class="pop-foot" data-i18n="brand.tagline"></div>
+    </div>
+
+    <div class="menu" id="menu" hidden></div>
+    <div class="toast" id="toast" hidden></div>
+
+    <script src="i18n.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
