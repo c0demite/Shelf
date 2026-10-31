@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('hub', {
   setAutostart: (on) => ipcRenderer.invoke('autostart:set', on),
   getLang: () => ipcRenderer.invoke('lang:get'),
   setLang: (l) => ipcRenderer.invoke('lang:set', l),
+  setTheme: (t) => ipcRenderer.invoke('theme:set', t),
   quickResize: (h) => ipcRenderer.invoke('quick:resize', h),
   quickHide: () => ipcRenderer.invoke('quick:hide'),
   openMain: () => ipcRenderer.invoke('quick:openMain'),

@@ -101,6 +101,9 @@ function applyI18n() {
   $('#lang').innerHTML = I18N.LANGS.map(
     ([code, name]) => `<button data-lang="${code}" class="${I18N.getLang() === code ? 'active' : ''}">${name}</button>`
   ).join('');
+  $('#theme').innerHTML = Theme.MODES.map(
+    (m) => `<button data-theme-mode="${m}" class="${Theme.get() === m ? 'active' : ''}">${esc(t('theme.' + m))}</button>`
+  ).join('');
   renderHotkey();
   setScanning(scanning);
 }
@@ -580,6 +583,10 @@ const togglePop = (show = pop.hidden) => {
   $('#setBtn').classList.toggle('on', show);
 };
 $('#setBtn').addEventListener('click', () => togglePop());
+$('#theme').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-theme-mode]');
+  if (b) api.setTheme(b.dataset.themeMode);
+});
 $('#lang').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-lang]');
   if (b) await api.setLang(b.dataset.lang); // main broadcasts lang:changed
@@ -710,6 +717,10 @@ api.on('library:items', (p) => {
   remember(items);
   render();
 });
+api.on('theme:changed', (m) => {
+  Theme.set(m);
+  applyI18n();
+});
 api.on('lang:changed', (l) => {
   I18N.setLang(l);
   applyI18n();
@@ -729,6 +740,7 @@ auto.addEventListener('change', async () => {
 (async () => {
   const [p, k] = await Promise.all([api.getLibrary(), api.hotkey()]);
   I18N.setLang(p.lang);
+  Theme.set(p.theme);
   hotkey = k;
   items = p.items;
   lastScan = p.lastScan;

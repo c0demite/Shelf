@@ -183,6 +183,7 @@ results.addEventListener('click', (e) => {
 $('#openMain').addEventListener('click', () => api.openMain());
 
 api.on('library:items', (p) => { items = p.items; render(); });
+api.on('theme:changed', (m) => Theme.set(m));
 api.on('lang:changed', (l) => { I18N.setLang(l); applyI18n(); render(); });
 api.on('icons:ready', () => { icons.clear(); render(); });
 api.on('quick:open', async () => {
@@ -192,6 +193,7 @@ api.on('quick:open', async () => {
   const p = await api.getLibrary();
   items = p.items;
   I18N.setLang(p.lang);
+  Theme.set(p.theme);
   applyI18n();
   render();
   input.focus();
@@ -201,6 +203,7 @@ api.on('quick:open', async () => {
   const p = await api.getLibrary();
   items = p.items;
   I18N.setLang(p.lang);
+  Theme.set(p.theme);
   applyI18n();
   render();
   input.focus();

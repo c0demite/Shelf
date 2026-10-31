@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -98,6 +98,7 @@ const payload = () => ({
   scanning,
   scanText,
   lang: I18N.getLang(),
+  theme: state.theme || 'dark',
 });
 
 // ---------- scanning ----------
@@ -331,7 +332,7 @@ function createWindow({ show = true } = {}) {
     height: 840,
     minWidth: 900,
     minHeight: 560,
-    backgroundColor: '#141210',
+    backgroundColor: bgColor(),
     title: 'Shelf',
     icon: ICON,
     show: show && !SHOT,
@@ -447,6 +448,20 @@ function setLang(l) {
   return state.lang;
 }
 ipcMain.handle('lang:get', () => I18N.getLang());
+
+// window background behind the page, so there is no dark flash in light mode
+const bgColor = () => {
+  const t = state.theme || 'dark';
+  return (t === 'system' ? nativeTheme.shouldUseDarkColors : t === 'dark') ? '#141210' : '#f4f1ea';
+};
+function setTheme(t) {
+  state.theme = ['dark', 'light', 'system'].includes(t) ? t : 'dark';
+  saveState();
+  if (win && !win.isDestroyed()) win.setBackgroundColor(bgColor());
+  send('theme:changed', state.theme);
+  return state.theme;
+}
+ipcMain.handle('theme:set', (_e, t) => setTheme(t));
 ipcMain.handle('lang:set', (_e, l) => setLang(l));
 
 // Ctrl+Space can be taken by the keyboard-language switcher – fall back if so
@@ -528,6 +543,7 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     loadState();
     if (flag('--lang')) I18N.setLang(flag('--lang')); // debug screenshots
+    if (flag('--theme')) state.theme = flag('--theme');
     if (dumpMode) {
       // Headless scan for debugging: electron . --dump out.json [--covers]
       const res = await scanAll({ shell, progress: (t) => console.log(t) });
