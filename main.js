@@ -568,6 +568,8 @@ function debugCapture(w, before) {
   w.webContents.on('console-message', (e) => console.log('[renderer]', e.message || e));
   w.webContents.once('did-finish-load', () => {
     if (before) before();
+    // transparent quick window has no backdrop in a capture – give it one
+    if (flag('--quick')) w.webContents.insertCSS('html { background: #0d0b0a !important; }');
     setTimeout(async () => {
       if (flag('--click')) {
         for (const sel of String(flag('--click')).split(',')) {
