@@ -47,6 +47,7 @@
             <button data-cat="hidden"><span data-i18n="tab.hidden"></span><span class="n" data-count="hidden"></span></button>
             <button data-cat="leftover"><span data-i18n="tab.leftover"></span><span class="n" data-count="leftover"></span></button>
           </div>
+          <div class="views shelves" id="shelves"></div>
           <div class="tools">
             <div class="dd" id="source"></div>
             <div class="dd" id="sort"></div>
@@ -95,6 +96,14 @@
         </button>
       </div>
       <div class="pop-foot" data-i18n="brand.tagline"></div>
+    </div>
+
+    <div class="dialog" id="dialog" hidden>
+      <div class="dlg">
+        <div class="dlg-title"></div>
+        <input type="text" maxlength="60" spellcheck="false" autocomplete="off" />
+        <div class="dlg-btns"><button class="btn ghost" data-cancel></button><button class="btn primary" data-ok></button></div>
+      </div>
     </div>
 
     <div class="menu" id="menu" hidden></div>

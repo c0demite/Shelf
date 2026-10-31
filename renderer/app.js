@@ -18,6 +18,8 @@ const SOURCES = {
 const srcLabel = (s) => (SOURCES[s] ? SOURCES[s].label() : '');
 
 let items = [];
+let shelves = []; // custom collections [{ id, name }]
+const shelfOf = (cat) => (cat && cat.startsWith('shelf:') ? shelves.find((s) => 'shelf:' + s.id === cat) : null);
 let scanning = false;
 let scanText = null; // [key, ...args] from the main process
 let lastScan = null;
@@ -120,6 +122,7 @@ function matches(it) {
     if (view.cat === 'app' && it.category !== 'app') return false;
     if (view.cat === 'fav' && !it.fav) return false;
     if (view.cat === 'recent' && !it.lastLaunch) return false;
+    if (view.cat.startsWith('shelf:') && !(it.shelves || []).includes(view.cat.slice(6))) return false;
   }
   if (view.source && it.source !== view.source) return false;
   if (view.q) {
@@ -235,7 +238,7 @@ function listView(list) {
   return `<table class="list"><thead><tr><th>${t('col.name')}</th><th>${t('col.type')}</th><th>${t('col.source')}</th><th style="text-align:right">${t('col.size')}</th><th style="text-align:right">${t('col.launched')}</th><th>${t('col.path')}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-const catTitle = (c) => t('tab.' + c);
+const catTitle = (c) => (shelfOf(c) ? shelfOf(c).name : t('tab.' + c));
 
 function render() {
   const content = $('#content');
@@ -257,6 +260,8 @@ function render() {
         ? t('empty.fav')
         : view.cat === 'leftover'
         ? t('empty.leftover')
+        : shelfOf(view.cat)
+        ? t('shelf.empty')
         : view.q
         ? t('empty.query', $('#search').value.trim())
         : t('empty.view');
@@ -309,6 +314,7 @@ function renderCounts() {
   document.querySelectorAll('#tabs button, #views button').forEach((b) => b.classList.toggle('active', b.dataset.cat === view.cat));
   // leftovers / hidden only show up when there is something in them
   document.querySelectorAll('#views button').forEach((b) => (b.hidden = !c[b.dataset.cat] && view.cat !== b.dataset.cat));
+  renderShelves(vis);
 
   const per = {};
   for (const it of vis) per[it.source] = (per[it.source] || 0) + 1;
@@ -442,6 +448,7 @@ const menu = $('#menu');
 function openMenu(id, x, y) {
   const it = byId(id);
   if (!it) return;
+  delete menu.dataset.shelf;
   const isGame = it.category === 'game';
   const btn = (act, ico, label, opts = '') => `<button data-act="${act}" ${opts}><span class="m-ico">${ico}</span>${esc(label)}</button>`;
   menu.innerHTML = `<div class="m-head">${esc(it.name)}${it.note ? ' · ' + esc(t(it.note)) : ''}</div>
@@ -451,6 +458,10 @@ function openMenu(id, x, y) {
     <div class="sep"></div>
     ${btn('folder', '⌂', t('menu.folder'), it.installDir || it.exe ? '' : 'disabled')}
     ${btn('hide', '◌', t(it.hidden ? 'menu.unhide' : 'menu.hide'))}
+    <div class="sep"></div>
+    <div class="m-sub">${esc(t('shelf.add'))}</div>
+    ${shelves.map((s) => btn('shelf', (it.shelves || []).includes(s.id) ? '✓' : '', s.name, `data-shelf="${esc(s.id)}"`)).join('')}
+    ${btn('shelf-new', '+', t('shelf.new') + '…')}
     ${it.uninstall || it.source === 'steam' ? `<div class="sep"></div>${btn('uninstall', '✕', t('menu.uninstall'), 'class="danger"')}` : ''}`;
   menu.dataset.id = id;
   menu.hidden = false;
@@ -480,10 +491,119 @@ menu.addEventListener('click', async (e) => {
       return;
     case 'hide':
       return setOv(id, { hidden: !it.hidden }, t(it.hidden ? 'toast.unhidden' : 'toast.hidden'));
+    case 'shelf': {
+      const sid = b.dataset.shelf;
+      const has = (it.shelves || []).includes(sid);
+      const name = shelves.find((s) => s.id === sid)?.name || '';
+      return setOv(id, { shelves: has ? it.shelves.filter((x) => x !== sid) : [...(it.shelves || []), sid] }, t(has ? 'shelf.removed' : 'shelf.added', name));
+    }
+    case 'shelf-new': {
+      const s = await newShelf();
+      if (s) setOv(id, { shelves: [...(it.shelves || []), s.id] }, t('shelf.added', s.name));
+      return;
+    }
+    case 'shelf-rename': {
+      const s = shelves.find((x) => x.id === menu.dataset.shelf);
+      const name = s && (await askName(t('shelf.rename'), s.name));
+      if (name) saveShelves(shelves.map((x) => (x === s ? { ...x, name } : x)));
+      return;
+    }
+    case 'shelf-delete': {
+      const s = shelves.find((x) => x.id === menu.dataset.shelf);
+      if (!s) return;
+      if (view.cat === 'shelf:' + s.id) view.cat = 'all';
+      saveShelves(shelves.filter((x) => x !== s));
+      return toast(t('shelf.deleted', s.name));
+    }
     case 'uninstall':
       await api.uninstall(id);
       return toast(t(it.source === 'steam' ? 'toast.steam' : 'toast.settings'));
   }
+});
+
+// ---------- shelves (collections) ----------
+function renderShelves(vis) {
+  const per = {};
+  for (const it of vis) for (const s of it.shelves || []) per[s] = (per[s] || 0) + 1;
+  $('#shelves').innerHTML =
+    shelves
+      .map(
+        (s) =>
+          `<button data-cat="shelf:${esc(s.id)}" class="${view.cat === 'shelf:' + s.id ? 'active' : ''}"><span>${esc(s.name)}</span><span class="n">${per[s.id] || ''}</span></button>`
+      )
+      .join('') + `<button class="add" data-new-shelf title="${esc(t('shelf.new'))}">+${shelves.length ? '' : ' ' + esc(t('shelf.new'))}</button>`;
+}
+function saveShelves(list) {
+  shelves = list;
+  api.saveShelves(list); // main sends library:items back, which re-renders
+}
+async function newShelf() {
+  const name = await askName(t('shelf.new'), '');
+  if (!name) return null;
+  const s = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
+  saveShelves([...shelves, s]);
+  return s;
+}
+function openShelfMenu(sid, x, y) {
+  const s = shelves.find((v) => v.id === sid);
+  if (!s) return;
+  const btn = (act, ico, label, opts = '') => `<button data-act="${act}" ${opts}><span class="m-ico">${ico}</span>${esc(label)}</button>`;
+  menu.innerHTML = `<div class="m-head">${esc(s.name)}</div>${btn('shelf-rename', '✎', t('shelf.rename'))}${btn('shelf-delete', '✕', t('shelf.delete'), 'class="danger"')}`;
+  menu.dataset.shelf = sid;
+  menu.hidden = false;
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
+  menu.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+}
+
+// Small name dialog (Electron has no window.prompt)
+function askName(title, value) {
+  return new Promise((resolve) => {
+    const dlg = $('#dialog');
+    const input = dlg.querySelector('input');
+    dlg.querySelector('.dlg-title').textContent = title;
+    dlg.querySelector('[data-ok]').textContent = t(value ? 'btn.save' : 'btn.create');
+    dlg.querySelector('[data-cancel]').textContent = t('btn.cancel');
+    input.placeholder = t('shelf.ph');
+    input.value = value || '';
+    dlg.hidden = false;
+    setTimeout(() => input.select(), 20);
+    const done = (v) => {
+      dlg.hidden = true;
+      dlg.onclick = input.onkeydown = null;
+      resolve(v ? v.trim().slice(0, 60) || null : null);
+    };
+    dlg.onclick = (e) => {
+      if (e.target.closest('[data-ok]')) done(input.value);
+      else if (e.target.closest('[data-cancel]') || e.target === dlg) done(null);
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') done(input.value);
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        done(null);
+      }
+    };
+  });
+}
+
+$('#shelves').addEventListener('click', async (e) => {
+  if (e.target.closest('[data-new-shelf]')) {
+    const s = await newShelf();
+    if (s) {
+      view.cat = 'shelf:' + s.id;
+      toast(t('shelf.created', s.name));
+    }
+    return;
+  }
+  const b = e.target.closest('button[data-cat]');
+  if (b) setCat(b.dataset.cat);
+});
+$('#shelves').addEventListener('contextmenu', (e) => {
+  const b = e.target.closest('button[data-cat]');
+  if (!b) return;
+  e.preventDefault();
+  openShelfMenu(b.dataset.cat.slice(6), e.clientX, e.clientY);
 });
 
 // ---------- dropdowns ----------
@@ -641,7 +761,7 @@ $('#scroll').addEventListener('scroll', () => {
 });
 
 function setCat(cat) {
-  view.cat = view.cat === cat && ['recent', 'hidden', 'leftover'].includes(cat) ? 'all' : cat;
+  view.cat = view.cat === cat && (['recent', 'hidden', 'leftover'].includes(cat) || cat.startsWith('shelf:')) ? 'all' : cat;
   render();
   $('#scroll').scrollTop = 0;
 }
@@ -717,6 +837,7 @@ api.on('icons:ready', () => {
 });
 api.on('library:items', (p) => {
   items = p.items;
+  shelves = p.shelves || [];
   if (p.lastScan) lastScan = p.lastScan;
   remember(items);
   render();
@@ -747,6 +868,7 @@ auto.addEventListener('change', async () => {
   Theme.set(p.theme);
   hotkey = k;
   items = p.items;
+  shelves = p.shelves || [];
   lastScan = p.lastScan;
   remember(items);
   scanText = p.scanText;

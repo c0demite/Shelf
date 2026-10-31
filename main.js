@@ -89,6 +89,7 @@ function view(it) {
     // Steam counts its own games; everything else is timed by Shelf
     playtime: it.source === 'steam' ? it.playtime || null : ov.played || it.playtime || null,
     playing: playing.has(it.id),
+    shelves: (ov.shelves || []).filter((s) => (state.shelves || []).some((x) => x.id === s)),
     lastLaunch: Math.max(ov.lastLaunch || 0, it.lastPlayed || 0) || null,
     coverAppId: cover || null,
     coverHeader: (cover && state.headers[cover]) || null,
@@ -102,6 +103,7 @@ const payload = () => ({
   scanText,
   lang: I18N.getLang(),
   theme: state.theme || 'dark',
+  shelves: state.shelves || [],
 });
 
 // ---------- playtime ----------
@@ -297,6 +299,17 @@ ipcMain.handle('item:override', (_e, id, patch) => {
   saveState();
   if (patch.category === 'game') fetchCovers();
   return view(it);
+});
+
+// Custom shelves (collections): the window sends the whole list, [{ id, name }]
+ipcMain.handle('shelves:save', (_e, list) => {
+  state.shelves = (Array.isArray(list) ? list : [])
+    .filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string')
+    .map((s) => ({ id: s.id.slice(0, 40), name: s.name.trim().slice(0, 60) }))
+    .filter((s) => s.name);
+  saveState();
+  send('library:items', payload());
+  return state.shelves;
 });
 
 ipcMain.handle('item:openFolder', (_e, id) => {
