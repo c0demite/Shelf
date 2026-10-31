@@ -214,6 +214,8 @@ kbd {
   position: absolute; left: 8px; top: 8px; font-size: 10.5px; font-weight: 600; letter-spacing: .2px;
   padding: 3px 8px; border-radius: 999px; background: #000000b0; color: #fffd; backdrop-filter: blur(4px);
 }
+.badge.live { background: var(--accent); color: #fff; }
+.badge.live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #fff; margin-right: 6px; vertical-align: 1px; animation: pulse 1.2s ease-in-out infinite; }
 .badge.warn { background: #c8452acc; color: #fff; }
 .card .title { margin-top: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .sub { font-size: 12.5px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

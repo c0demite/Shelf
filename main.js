@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { scanAll } = require('./src/scanner');
 const { norm } = require('./src/util');
 const Icons = require('./src/icons');
@@ -86,6 +86,9 @@ function view(it) {
     fav: !!ov.fav,
     hidden: ov.hidden != null ? ov.hidden : !!it.autoHidden,
     launches: ov.launches || 0,
+    // Steam counts its own games; everything else is timed by Shelf
+    playtime: it.source === 'steam' ? it.playtime || null : ov.played || it.playtime || null,
+    playing: playing.has(it.id),
     lastLaunch: Math.max(ov.lastLaunch || 0, it.lastPlayed || 0) || null,
     coverAppId: cover || null,
     coverHeader: (cover && state.headers[cover]) || null,
@@ -100,6 +103,45 @@ const payload = () => ({
   lang: I18N.getLang(),
   theme: state.theme || 'dark',
 });
+
+// ---------- playtime ----------
+// Once a minute: which games have a running process inside their install folder?
+// Works no matter how the game was started (Shelf, launcher, desktop shortcut).
+let playing = new Set();
+const PLAY_TICK = 60e3;
+function gameDirs() {
+  return state.items
+    .map(view)
+    .filter((i) => i.category === 'game' && !i.leftover && !i.hidden && i.installDir)
+    .map((i) => ({ id: i.id, dir: path.normalize(i.installDir).toLowerCase().replace(/[\\/]+$/, '') + path.sep }))
+    .filter((g) => g.dir.split(path.sep).filter(Boolean).length >= 3); // never a whole drive or "F:\Games"
+}
+function runningExes() {
+  return new Promise((resolve) =>
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', 'Get-Process | Where-Object Path | ForEach-Object Path'],
+      { windowsHide: true, timeout: 20000, maxBuffer: 8 << 20 },
+      (err, out) => resolve(err ? null : out.split(/\r?\n/).filter(Boolean).map((s) => s.toLowerCase()))
+    )
+  );
+}
+async function trackPlaytime() {
+  const games = gameDirs();
+  if (!games.length && !playing.size) return;
+  const exes = await runningExes();
+  if (!exes) return;
+  const now = new Set(games.filter((g) => exes.some((e) => e.startsWith(g.dir))).map((g) => g.id));
+  for (const id of now) {
+    const ov = (state.overrides[id] ||= {});
+    ov.played = (ov.played || 0) + 1;
+    ov.lastLaunch = Date.now();
+  }
+  const changed = now.size !== playing.size || [...now].some((id) => !playing.has(id));
+  playing = now;
+  if (now.size) saveState();
+  if (changed || now.size) send('library:items', payload());
+}
 
 // ---------- scanning ----------
 // Shelf should not list itself (installed copy, or Electron when run from source)
@@ -572,6 +614,8 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
     createQuick();
     extractIcons(); // icons for the cached list while the fresh scan runs
     doScan();
+    setTimeout(trackPlaytime, 15e3);
+    setInterval(trackPlaytime, PLAY_TICK);
   });
 
   app.on('before-quit', () => (quitting = true));

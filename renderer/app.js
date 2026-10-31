@@ -137,6 +137,7 @@ function sorted(list) {
     recent: (a, b) => (b.lastLaunch || 0) - (a.lastLaunch || 0) || byName(a, b),
     size: (a, b) => (b.size || 0) - (a.size || 0) || byName(a, b),
     installed: (a, b) => (b.installDate || 0) - (a.installDate || 0) || byName(a, b),
+    played: (a, b) => (b.playtime || 0) - (a.playtime || 0) || byName(a, b),
   };
   return [...list].sort(fns[s] || byName);
 }
@@ -144,6 +145,7 @@ function sorted(list) {
 // ---------- rendering ----------
 function subLine(it) {
   if (it.leftover) return t(it.missingDir ? 'left.missing' : 'left.empty');
+  if (it.playing) return t('playing');
   if (view.sort === 'size' && it.size) return fmtSize(it.size);
   if ((view.sort === 'recent' || view.cat === 'recent') && it.lastLaunch) return fmtAgo(it.lastLaunch);
   if (it.playtime) return fmtPlay(it.playtime);
@@ -158,6 +160,8 @@ function gameCard(it) {
     : '';
   const badge = it.leftover
     ? `<span class="badge warn">${esc(t('badge.leftover'))}</span>`
+    : it.playing
+    ? `<span class="badge live">${esc(t('playing'))}</span>`
     : !['steam', 'registry', 'folder', 'shortcut'].includes(it.source)
     ? `<span class="badge">${esc(srcLabel(it.source))}</span>`
     : '';
@@ -195,7 +199,7 @@ function section(title, list, kind, opts = {}) {
 
 function recentCard(it) {
   const img = it.coverAppId;
-  const sub = `${fmtAgo(it.lastLaunch)} · ${typeLabel(it).toLowerCase()}`;
+  const sub = it.playing ? t('playing') : [fmtAgo(it.lastLaunch), it.playtime ? fmtPlay(it.playtime) : typeLabel(it).toLowerCase()].join(' · ');
   return `<div class="rc${img ? ' img' : ''}" tabindex="0" data-id="${esc(it.id)}">
     ${img ? `<img class="bgimg" data-header src="${headerUrl(img)}" alt="">` : `<div class="halo"><img data-icon="${esc(it.id)}" alt="" hidden></div><div class="big">${iconSlot(it)}</div>`}
     <div class="meta">${img ? `<div class="ico-wrap">${iconSlot(it)}</div>` : ''}<div><div class="nm">${esc(it.name)}</div><div class="sb">${esc(sub)}</div></div></div>
@@ -317,7 +321,7 @@ function renderCounts() {
     view.source || ''
   );
   document.querySelectorAll('#mode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === view.mode));
-  ddSort.set(['name', 'recent', 'size', 'installed'].map((v) => ({ value: v, label: t('sort.' + v) })), view.sort);
+  ddSort.set(['name', 'recent', 'played', 'size', 'installed'].map((v) => ({ value: v, label: t('sort.' + v) })), view.sort);
 }
 
 // ---------- icons (lazy) ----------
