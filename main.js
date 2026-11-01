@@ -130,18 +130,58 @@ function runningExes() {
   return new Promise((resolve) =>
     execFile(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', 'Get-Process | Where-Object Path | ForEach-Object Path'],
+      // "1|path" for processes with a visible main window, "0|path" for the rest
+      ['-NoProfile', '-NonInteractive', '-Command', "Get-Process | Where-Object Path | ForEach-Object { [int]($_.MainWindowHandle -ne 0), $_.Path -join '|' }"],
       { windowsHide: true, timeout: 20000, maxBuffer: 8 << 20 },
-      (err, out) => resolve(err ? null : out.split(/\r?\n/).filter(Boolean).map((s) => s.toLowerCase()))
+      (err, out) => {
+        if (err) return resolve(null);
+        const lines = out.split(/\r?\n/).filter((s) => s[1] === '|');
+        resolve({ all: lines.map((s) => s.slice(2).toLowerCase()), windowed: lines.filter((s) => s[0] === '1').map((s) => s.slice(2).toLowerCase()) });
+      }
     )
   );
 }
+// Apps started outside Shelf (Start menu, taskbar): no playtime, only "last launched"
+// when a window from the app's folder shows up that wasn't there on the last tick.
+// Windowless helpers (updaters, git.exe calls, tray daemons) are ignored.
+let appsKnown = null; // app ids checked on the last tick (null = no tick yet)
+let appsRunning = new Set();
+function appMatchers() {
+  const sysRoot = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase() + path.sep;
+  const out = [];
+  for (const i of state.items.map(view)) {
+    if (i.leftover || i.hidden || isSelf(i)) continue;
+    const dir = i.installDir || (i.exe && path.dirname(i.exe));
+    if (!dir) continue;
+    const d = path.normalize(dir).toLowerCase().replace(/[\\/]+$/, '') + path.sep;
+    if (d.startsWith(sysRoot)) continue; // system tools share one folder
+    if (d.split(path.sep).filter(Boolean).length >= 3) out.push({ id: i.id, app: i.category === 'app', dir: d });
+    else if (i.exe && i.category === 'app') out.push({ id: i.id, app: true, exe: path.normalize(i.exe).toLowerCase() });
+  }
+  return out;
+}
+function runningApps(exes) {
+  const ms = appMatchers();
+  const now = new Set();
+  for (const e of exes) {
+    // most specific match wins, so a game inside the Steam folder doesn't count as Steam
+    let best = null;
+    for (const m of ms) {
+      if (m.exe ? e === m.exe : e.startsWith(m.dir)) {
+        const len = m.exe ? Infinity : m.dir.length;
+        if (!best || len > best.len) best = { m, len };
+      }
+    }
+    if (best && best.m.app) now.add(best.m.id);
+  }
+  return { now, known: new Set(ms.filter((m) => m.app).map((m) => m.id)) };
+}
+
 async function trackPlaytime() {
   const games = gameDirs();
-  if (!games.length && !playing.size) return;
   const exes = await runningExes();
   if (!exes) return;
-  const now = new Set(games.filter((g) => exes.some((e) => e.startsWith(g.dir))).map((g) => g.id));
+  const now = new Set(games.filter((g) => exes.all.some((e) => e.startsWith(g.dir))).map((g) => g.id));
   for (const id of now) {
     const ov = (state.overrides[id] ||= {});
     ov.played = (ov.played || 0) + 1;
@@ -149,8 +189,23 @@ async function trackPlaytime() {
   }
   const changed = now.size !== playing.size || [...now].some((id) => !playing.has(id));
   playing = now;
-  if (now.size) saveState();
-  if (changed || now.size) send('library:items', payload());
+
+  // apps: first tick is only a baseline; later, newly started ones get a timestamp
+  const apps = runningApps(exes.windowed);
+  let started = 0;
+  if (appsKnown) {
+    for (const id of apps.now) {
+      if (appsKnown.has(id) && !appsRunning.has(id)) {
+        (state.overrides[id] ||= {}).lastLaunch = Date.now();
+        started++;
+      }
+    }
+  }
+  appsKnown = apps.known;
+  appsRunning = apps.now;
+
+  if (now.size || started) saveState();
+  if (changed || now.size || started) send('library:items', payload());
 }
 
 // ---------- scanning ----------
@@ -341,6 +396,7 @@ ipcMain.handle('item:launch', async (_e, id) => {
     ov.lastLaunch = Date.now();
     ov.launches = (ov.launches || 0) + 1;
     saveState();
+    send('library:items', payload()); // keep every window's "Recent" in sync
     return { ok: true, item: view(it), focused };
   } catch (e) {
     return { ok: false, error: e.message };

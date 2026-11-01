@@ -445,10 +445,7 @@ async function launch(id) {
   toast(t('toast.launching', it.name));
   const r = await api.launch(id);
   if (!r.ok) toast(t('toast.failed', r.error), true);
-  else if (r.item) {
-    replace(r.item);
-    render();
-  }
+  else if (r.item) replace(r.item); // main also broadcasts library:items, which re-renders
 }
 
 async function setOv(id, patch, msg) {
