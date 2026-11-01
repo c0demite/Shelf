@@ -1,7 +1,7 @@
 {
   "name": "shelf",
   "productName": "Shelf",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Everything you own, on one shelf. Finds every game and app on your Windows PC and puts them in one place.",
   "homepage": "https://github.com/c0demite/Shelf",
   "repository": {
