@@ -119,12 +119,35 @@ const payload = () => ({
 // Works no matter how the game was started (Shelf, launcher, desktop shortcut).
 let playing = new Set();
 const PLAY_TICK = 60e3;
+// The folder whose processes belong to an item – or null when it's too broad to tell:
+// a whole drive, C:\Windows, a shared container like "D:\Games", or Shelf itself.
+// Games often sit right under a drive ("F:\Satisfactory"), so one level is fine unless it's a container.
+const CONTAINERS = new Set(['games', 'game', 'gry', 'program files', 'program files (x86)', 'programdata', 'steam', 'steamlibrary', 'xboxgames', 'epic games', 'gog games', 'gog galaxy', 'riot games', 'ubisoft', 'ea games', 'users', 'windows', 'apps', 'programs', 'programy', 'tools', 'portable', 'downloads', 'pobrane', 'desktop']);
+const SYS_ROOT = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase();
+function watchDir(it) {
+  const dirs = [it.installDir, it.exe && path.dirname(it.exe)];
+  if (!it.installDir && !it.exe && it.lnk) {
+    try {
+      const target = shell.readShortcutLink(it.lnk).target;
+      if (target) dirs.push(path.dirname(target));
+    } catch {}
+  }
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const d = path.normalize(dir).toLowerCase().replace(/[\\/]+$/, '');
+    if (d === SYS_ROOT || d.startsWith(SYS_ROOT + path.sep)) return null; // system tools share one folder
+    if (SELF_DIRS.some((s) => (d + path.sep).startsWith(s))) return null;
+    const parts = d.split(path.sep).filter(Boolean);
+    if (parts.length >= 3 || (parts.length === 2 && !CONTAINERS.has(parts[1]))) return d + path.sep;
+  }
+  return null;
+}
 function gameDirs() {
   return state.items
     .map(view)
-    .filter((i) => i.category === 'game' && !i.leftover && !i.hidden && i.installDir)
-    .map((i) => ({ id: i.id, dir: path.normalize(i.installDir).toLowerCase().replace(/[\\/]+$/, '') + path.sep }))
-    .filter((g) => g.dir.split(path.sep).filter(Boolean).length >= 3); // never a whole drive or "F:\Games"
+    .filter((i) => i.category === 'game' && !i.leftover && !i.hidden)
+    .map((i) => ({ id: i.id, dir: watchDir(i) }))
+    .filter((g) => g.dir);
 }
 function runningExes() {
   return new Promise((resolve) =>
@@ -147,16 +170,13 @@ function runningExes() {
 let appsKnown = null; // app ids checked on the last tick (null = no tick yet)
 let appsRunning = new Set();
 function appMatchers() {
-  const sysRoot = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase() + path.sep;
   const out = [];
   for (const i of state.items.map(view)) {
     if (i.leftover || i.hidden || isSelf(i)) continue;
-    const dir = i.installDir || (i.exe && path.dirname(i.exe));
-    if (!dir) continue;
-    const d = path.normalize(dir).toLowerCase().replace(/[\\/]+$/, '') + path.sep;
-    if (d.startsWith(sysRoot)) continue; // system tools share one folder
-    if (d.split(path.sep).filter(Boolean).length >= 3) out.push({ id: i.id, app: i.category === 'app', dir: d });
-    else if (i.exe && i.category === 'app') out.push({ id: i.id, app: true, exe: path.normalize(i.exe).toLowerCase() });
+    const d = watchDir(i);
+    if (d) out.push({ id: i.id, app: i.category === 'app', dir: d });
+    else if (i.exe && i.category === 'app' && !path.normalize(i.exe).toLowerCase().startsWith(SYS_ROOT + path.sep))
+      out.push({ id: i.id, app: true, exe: path.normalize(i.exe).toLowerCase() });
   }
   return out;
 }
@@ -334,21 +354,11 @@ function launch(it) {
 // Starting an app that is already open often does nothing visible (its window stays
 // behind others or minimized). If one of its processes has a window, show that instead.
 function runningMatch(it) {
-  let dir = it.installDir || (it.exe && path.dirname(it.exe));
-  if (!dir && it.lnk) {
-    try {
-      const target = shell.readShortcutLink(it.lnk).target;
-      if (target) dir = path.dirname(target);
-    } catch {}
-  }
-  if (!dir) return null;
-  dir = path.normalize(dir).replace(/[\\/]+$/, '').toLowerCase();
-  const sysRoot = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase();
-  if (dir === sysRoot || dir.startsWith(sysRoot + path.sep)) return null; // system tools share one folder
-  if (SELF_DIRS.some((d) => (dir + path.sep).startsWith(d))) return null;
-  // a whole drive or "D:\Tools" is too broad – then only the exact exe counts
-  if (dir.split(path.sep).filter(Boolean).length >= 3) return { prefix: dir + path.sep };
-  return it.exe ? { exact: path.normalize(it.exe).toLowerCase() } : null;
+  const dir = watchDir(it);
+  if (dir) return { prefix: dir };
+  // folder too broad (e.g. "D:\Tools") – then only the exact exe counts
+  const exe = it.exe && path.normalize(it.exe).toLowerCase();
+  return exe && !exe.startsWith(SYS_ROOT + path.sep) ? { exact: exe } : null;
 }
 function focusRunning(it) {
   const m = runningMatch(it);
