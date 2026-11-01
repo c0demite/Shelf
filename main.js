@@ -396,6 +396,36 @@ ipcMain.handle('library:scan', () => {
   return true;
 });
 
+// ---------- launch a whole shelf ----------
+// Starts everything on a shelf, one by one. Apps that already have a window are skipped.
+async function launchShelf(sid) {
+  const list = state.items.map(view).filter((i) => (i.shelves || []).includes(sid) && !i.leftover && i.canLaunch);
+  const res = { total: list.length, launched: 0, running: 0, failed: 0 };
+  if (!list.length) return res;
+  const exes = await runningExes();
+  for (const it of list) {
+    const m = runningMatch(it);
+    if (exes && m && exes.windowed.some((e) => (m.prefix ? e.startsWith(m.prefix) : e === m.exact))) {
+      res.running++;
+      continue;
+    }
+    try {
+      if (res.launched) await new Promise((r) => setTimeout(r, 500)); // don't start everything in the same instant
+      await launch(find(it.id));
+      const ov = (state.overrides[it.id] ||= {});
+      ov.lastLaunch = Date.now();
+      ov.launches = (ov.launches || 0) + 1;
+      res.launched++;
+    } catch {
+      res.failed++;
+    }
+  }
+  saveState();
+  send('library:items', payload());
+  return res;
+}
+ipcMain.handle('shelf:launch', (_e, sid) => launchShelf(String(sid)));
+
 ipcMain.handle('item:launch', async (_e, id) => {
   const it = find(id);
   if (!it) return { ok: false, error: 'Nie znaleziono' };

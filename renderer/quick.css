@@ -70,3 +70,5 @@ kbd {
   font: 500 10.5px Geist, sans-serif; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line);
   background: var(--hover); color: var(--ink-2); margin-right: 2px;
 }
+
+.row .ic.shelf-ic { color: var(--ink); background: var(--accent-soft, #f06b3c22); }

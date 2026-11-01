@@ -298,6 +298,11 @@ function render() {
     const tApps = view.cat === 'all' ? t('sec.apps') : t('sec.ofApps', catTitle(view.cat));
     html = section(tGames, games, 'games') + section(tApps, apps, 'apps');
   }
+  const sh = shelfOf(view.cat);
+  if (sh) {
+    const n = items.filter((i) => (i.shelves || []).includes(sh.id) && i.canLaunch && !i.leftover).length;
+    html = `<div class="cleanup shelf-bar"><div><b>${esc(t('shelf.barTitle'))}</b><span>${esc(t('shelf.barText'))}</span></div><button class="btn primary" data-launch-shelf="${esc(sh.id)}" ${n ? '' : 'disabled'}><svg width="12" height="12" viewBox="0 0 24 24"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>${esc(t('shelf.launchAll', n))}</button></div>` + html;
+  }
   if (view.cat === 'leftover') html = `<div class="cleanup"><div><b>${esc(t('left.bannerTitle'))}</b><span>${esc(t('left.bannerText'))}</span></div><button class="btn primary" data-cleanup-all>${esc(t('left.cleanAll', list.length))}</button></div>` + html;
   content.innerHTML = html;
   renderCounts();
@@ -521,6 +526,8 @@ menu.addEventListener('click', async (e) => {
       if (name) saveShelves(shelves.map((x) => (x === s ? { ...x, name } : x)));
       return;
     }
+    case 'shelf-launch':
+      return launchShelf(menu.dataset.shelf);
     case 'shelf-delete': {
       const s = shelves.find((x) => x.id === menu.dataset.shelf);
       if (!s) return;
@@ -703,6 +710,18 @@ coverDlg.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- launch a whole shelf ----------
+async function launchShelf(sid) {
+  const s = shelves.find((x) => x.id === sid);
+  if (!s) return;
+  toast(t('shelf.launching', s.name));
+  const r = await api.launchShelf(sid);
+  if (!r.total) return toast(t('shelf.emptyLaunch'), true);
+  const parts = [r.launched ? t('shelf.started', r.launched) : null, r.running ? t('shelf.wasOpen', r.running) : null, r.failed ? t('shelf.failedN', r.failed) : null];
+  const text = parts.filter(Boolean).join(' · ');
+  toast(text.charAt(0).toUpperCase() + text.slice(1), !!r.failed);
+}
+
 // ---------- leftovers clean-up ----------
 async function cleanup(ids) {
   if (!ids.length) return;
@@ -775,7 +794,7 @@ function openShelfMenu(sid, x, y) {
   const s = shelves.find((v) => v.id === sid);
   if (!s) return;
   const btn = (act, ico, label, opts = '') => `<button data-act="${act}" ${opts}><span class="m-ico">${ico}</span>${esc(label)}</button>`;
-  menu.innerHTML = `<div class="m-head">${esc(s.name)}</div>${btn('shelf-rename', '✎', t('shelf.rename'))}${btn('shelf-delete', '✕', t('shelf.delete'), 'class="danger"')}`;
+  menu.innerHTML = `<div class="m-head">${esc(s.name)}</div>${btn('shelf-launch', '▶', t('shelf.launch'))}<div class="sep"></div>${btn('shelf-rename', '✎', t('shelf.rename'))}${btn('shelf-delete', '✕', t('shelf.delete'), 'class="danger"')}`;
   menu.dataset.shelf = sid;
   menu.hidden = false;
   const r = menu.getBoundingClientRect();
@@ -964,6 +983,8 @@ function renderHotkey() {
 // ---------- events ----------
 const content = $('#content');
 content.addEventListener('click', (e) => {
+  const ls = e.target.closest('[data-launch-shelf]');
+  if (ls) return launchShelf(ls.dataset.launchShelf);
   if (e.target.closest('[data-cleanup-all]')) return cleanup(items.filter((i) => i.leftover).map((i) => i.id));
   const more = e.target.closest('[data-goto]');
   if (more) return setCat(more.dataset.goto);

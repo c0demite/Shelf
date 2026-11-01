@@ -37,7 +37,7 @@ After a few years every PC turns into an attic. Games live in four different lau
 - **Add anything by hand.** Shelf missed something? Click **Add** or drop an .exe or a shortcut onto the window.
 - **Pick your own cover.** Search Steam for any cover art, or use a picture from your disk.
 - **Already open? It comes to the front.** Launching an app that is already running shows its window instead of doing nothing.
-- **Your own shelves.** Group anything into collections such as *Co-op nights* or *To finish*.
+- **Your own shelves.** Group anything into collections such as *Co-op nights* or *To finish* – then start the whole shelf in one go, from the shelf itself or by typing its name in <kbd>Ctrl</kbd>+<kbd>Space</kbd>. Apps that are already open are left alone.
 - **Playtime for every game.** Shelf notices when a game is running, however you started it, and counts the hours – not only for Steam.
 - **Recently played, favorites, hidden.** Pick up where you left off, star what matters, hide what doesn't.
 - **Leftover clean-up.** Finds dead "installed program" entries and empty folders left behind by uninstalled games, and removes them in one click (with a registry backup first).

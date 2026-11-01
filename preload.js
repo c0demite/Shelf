@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('hub', {
   setAutostart: (on) => ipcRenderer.invoke('autostart:set', on),
   getLang: () => ipcRenderer.invoke('lang:get'),
   setLang: (l) => ipcRenderer.invoke('lang:set', l),
+  launchShelf: (id) => ipcRenderer.invoke('shelf:launch', id),
   saveShelves: (list) => ipcRenderer.invoke('shelves:save', list),
   removeLeftovers: (ids) => ipcRenderer.invoke('leftover:remove', ids),
   openPath: (p) => ipcRenderer.invoke('app:openPath', p),

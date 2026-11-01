@@ -17,6 +17,7 @@ function applyI18n() {
 }
 
 let items = [];
+let shelves = [];
 let shown = [];
 let sel = 0;
 let msg = '';
@@ -51,6 +52,13 @@ function score(it, q) {
   return s - n.length / 100;
 }
 
+// shelves show up as rows that start everything on them
+function shelfRows() {
+  return shelves
+    .map((s) => ({ shelf: true, id: 'shelf:' + s.id, sid: s.id, name: s.name, canLaunch: true, count: items.filter((i) => (i.shelves || []).includes(s.id) && !i.leftover && i.canLaunch).length }))
+    .filter((s) => s.count);
+}
+
 function compute() {
   const q = fold(input.value.trim());
   const pool = items.filter((i) => !i.hidden && !i.leftover);
@@ -60,11 +68,13 @@ function compute() {
     const groups = [];
     if (recent.length) groups.push([t('q.recent'), recent]);
     if (favs.length) groups.push([t('q.fav'), favs]);
+    const sh = shelfRows().slice(0, 3);
+    if (sh.length) groups.push([t('q.shelves'), sh]);
     if (!groups.length) groups.push([t('q.games'), pool.filter((i) => i.category === 'game').slice(0, 8)]);
     return groups;
   }
-  const hits = pool
-    .map((i) => [i, score(i, q)])
+  const hits = [...pool, ...shelfRows()]
+    .map((i) => { const s = score(i, q); return [i, s >= 0 && i.shelf ? s + 5 : s]; })
     .filter(([, s]) => s >= 0)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
@@ -79,6 +89,7 @@ function highlight(name, q) {
   return esc(name.slice(0, i)) + '<mark>' + esc(name.slice(i, i + q.length)) + '</mark>' + esc(name.slice(i + q.length));
 }
 
+const SHELF_ICON = '<svg viewBox="0 0 48 48" width="22" height="22"><rect x="8" y="13" width="7.5" height="24" rx="2.6" fill="currentColor"/><rect x="18" y="7" width="7.5" height="30" rx="2.6" style="fill:var(--accent)"/><rect x="29.5" y="15" width="7.5" height="22" rx="2.6" fill="currentColor" transform="rotate(16 33.25 37)"/><rect x="5" y="38.5" width="38" height="3.2" rx="1.6" fill="currentColor"/></svg>';
 const icons = new Map();
 function render() {
   const q = fold(input.value.trim());
@@ -90,13 +101,13 @@ function render() {
   for (const [label, list] of groups) {
     if (label && list.length) html += `<div class="label">${label}</div>`;
     for (const it of list) {
-      const sub = [t(it.category === 'game' ? 'type.game' : 'type.app'), srcLabel(it.source), it.lastLaunch ? ago(it.lastLaunch) : null]
+      const sub = (it.shelf ? [t('q.shelf'), t('q.shelfSub', it.count)] : [t(it.category === 'game' ? 'type.game' : 'type.app'), srcLabel(it.source), it.lastLaunch ? ago(it.lastLaunch) : null])
         .filter(Boolean)
         .join(' · ');
       const ic = icons.get(it.id);
       const letter = `<div class="letter" style="background:linear-gradient(135deg,hsl(${hue(it.name)} 40% 48%),hsl(${(hue(it.name) + 40) % 360} 45% 34%))">${esc((it.name.match(/[\p{L}\p{N}]/u) || ['?'])[0].toUpperCase())}</div>`;
       html += `<div class="row${idx === sel ? ' sel' : ''}${it.canLaunch ? '' : ' dead'}" data-i="${idx}">
-        <div class="ic" data-icon="${esc(it.id)}">${ic ? `<img src="${ic}" alt="">` : letter}</div>
+        ${it.shelf ? `<div class="ic shelf-ic">${SHELF_ICON}</div>` : `<div class="ic" data-icon="${esc(it.id)}">${ic ? `<img src="${ic}" alt="">` : letter}</div>`}
         <div class="txt"><div class="nm">${highlight(it.name, q)}</div><div class="sb">${esc(sub)}</div></div>
         <div class="go">${it.canLaunch ? 'Enter ↵' : esc(t('q.noFile'))}</div>
       </div>`;
@@ -140,6 +151,10 @@ function move(d) {
 async function activate(folder) {
   const it = shown[sel];
   if (!it) return;
+  if (it.shelf) {
+    api.launchShelf(it.sid); // starts them one by one in the background
+    return api.quickHide();
+  }
   if (folder) {
     await api.openFolder(it.id);
     return api.quickHide();
@@ -182,7 +197,7 @@ results.addEventListener('click', (e) => {
 });
 $('#openMain').addEventListener('click', () => api.openMain());
 
-api.on('library:items', (p) => { items = p.items; render(); });
+api.on('library:items', (p) => { items = p.items; shelves = p.shelves || []; render(); });
 api.on('theme:changed', (m) => Theme.set(m));
 api.on('lang:changed', (l) => { I18N.setLang(l); applyI18n(); render(); });
 api.on('icons:ready', () => { icons.clear(); render(); });
@@ -192,6 +207,7 @@ api.on('quick:open', async () => {
   msg = '';
   const p = await api.getLibrary();
   items = p.items;
+  shelves = p.shelves || [];
   I18N.setLang(p.lang);
   Theme.set(p.theme);
   applyI18n();
@@ -202,6 +218,7 @@ api.on('quick:open', async () => {
 (async () => {
   const p = await api.getLibrary();
   items = p.items;
+  shelves = p.shelves || [];
   I18N.setLang(p.lang);
   Theme.set(p.theme);
   applyI18n();
