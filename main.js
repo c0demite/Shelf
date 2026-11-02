@@ -845,12 +845,38 @@ function showMain() {
 
 // Spotlight-style quick launcher
 const QUICK_W = 720; // includes room for the panel shadow
+const QUICK_PAD = { w: 48, h: 52 }; // that room: body padding around the panel
+// Without GPU compositing (virtual machines, remote desktop, hardware acceleration off) Windows
+// draws a transparent window on a dark box. Then the launcher is a plain window the size of the panel.
+let quickSolid = false;
+const quickW = () => (quickSolid ? QUICK_W - QUICK_PAD.w : QUICK_W);
+const quickBg = () => (bgColor() === '#141210' ? '#1c1916' : '#fbfaf6');
+function canBeTransparent() {
+  if (flag('--solid-quick')) return false;
+  if (SHOT) return true; // debug captures: the GPU answer may come too late
+  if (process.platform !== 'win32') return true;
+  try {
+    return String(app.getGPUFeatureStatus().gpu_compositing || '').startsWith('enabled');
+  } catch {
+    return true;
+  }
+}
+// The GPU state is only known ~150 ms after start (it reads as off before that), so swap the window when it arrives
+function syncQuickMode() {
+  if (SHOT || !quick || quick.isDestroyed() || quick.isVisible()) return;
+  if (!canBeTransparent() === quickSolid) return;
+  quick.destroy();
+  createQuick();
+}
+app.on('gpu-info-update', syncQuickMode);
 function createQuick() {
+  quickSolid = !canBeTransparent();
   quick = new BrowserWindow({
-    width: QUICK_W,
+    width: quickW(),
     height: 72,
     frame: false,
-    transparent: true,
+    transparent: !quickSolid,
+    ...(quickSolid ? { backgroundColor: quickBg() } : {}),
     resizable: false,
     movable: false,
     minimizable: false,
@@ -863,7 +889,7 @@ function createQuick() {
     webPreferences: webPrefs,
   });
   quick.setAlwaysOnTop(true, 'pop-up-menu');
-  quick.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
+  quick.loadFile(path.join(__dirname, 'renderer', 'quick.html'), quickSolid ? { query: { solid: '1' } } : undefined);
   lockDown(quick);
   quick.on('blur', () => !SHOT && hideQuick());
   quick.on('close', (e) => {
@@ -876,10 +902,12 @@ function createQuick() {
 }
 
 function showQuick() {
+  syncQuickMode();
   if (!quick || quick.isDestroyed()) createQuick();
   // Open on the screen where the mouse is, a bit above the middle
   const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  quick.setPosition(Math.round(d.x + (d.width - QUICK_W) / 2), Math.round(d.y + d.height * 0.22));
+  quick.setPosition(Math.round(d.x + (d.width - quickW()) / 2), Math.round(d.y + d.height * 0.22));
+  if (quickSolid) quick.setBackgroundColor(quickBg()); // theme may have changed
   quick.webContents.send('quick:open');
   quick.show();
   quick.focus();
@@ -892,10 +920,12 @@ function toggleQuick() {
   else showQuick();
 }
 
+// h = height of the panel itself
 ipcMain.handle('quick:resize', (_e, h) => {
   if (!quick || quick.isDestroyed()) return;
   const [x, y] = quick.getPosition();
-  quick.setBounds({ x, y, width: QUICK_W, height: Math.max(100, Math.min(620, Math.round(h))) });
+  const pad = quickSolid ? 0 : QUICK_PAD.h;
+  quick.setBounds({ x, y, width: quickW(), height: Math.max(48, Math.min(620 - pad, Math.round(h))) + pad });
 });
 ipcMain.handle('quick:hide', () => hideQuick());
 ipcMain.handle('quick:openMain', () => {

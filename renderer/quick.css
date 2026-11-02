@@ -72,3 +72,7 @@ kbd {
 }
 
 .row .ic.shelf-ic { color: var(--ink); background: var(--accent-soft, #f06b3c22); }
+
+/* plain window (no transparency): the window itself is the panel */
+.solid body { padding: 0; background: var(--paper); }
+.solid .panel { border: 0; border-radius: 0; box-shadow: none; }

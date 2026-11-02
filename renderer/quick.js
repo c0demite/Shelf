@@ -1,4 +1,6 @@
 'use strict';
+// a plain (not see-through) window: drop the room left for the shadow
+if (new URLSearchParams(location.search).get('solid')) document.documentElement.classList.add('solid');
 // Quick launcher (Ctrl+Space): type, arrows, Enter.
 
 const api = window.hub;
@@ -138,7 +140,7 @@ function loadIcons() {
 }
 
 function fit() {
-  requestAnimationFrame(() => api.quickResize($('#panel').getBoundingClientRect().height + 52));
+  requestAnimationFrame(() => api.quickResize($('#panel').getBoundingClientRect().height));
 }
 
 function move(d) {
