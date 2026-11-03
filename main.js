@@ -848,35 +848,57 @@ const QUICK_W = 720; // includes room for the panel shadow
 const QUICK_PAD = { w: 48, h: 52 }; // that room: body padding around the panel
 // Without GPU compositing (virtual machines, remote desktop, hardware acceleration off) Windows
 // draws a transparent window on a dark box. Then the launcher is a plain window the size of the panel.
-let quickSolid = false;
-const quickW = () => (quickSolid ? QUICK_W - QUICK_PAD.w : QUICK_W);
-const quickBg = () => (bgColor() === '#141210' ? '#1c1916' : '#fbfaf6');
-function canBeTransparent() {
-  if (flag('--solid-quick')) return false;
-  if (SHOT) return true; // debug captures: the GPU answer may come too late
-  if (process.platform !== 'win32') return true;
+let quickPlain = false;
+const QUICK_MAX_PANEL = 568; // tallest the results panel gets
+const quickW = () => (quickPlain ? QUICK_W - QUICK_PAD.w : QUICK_W);
+const quickBg = () => (isDark() ? '#1c1916' : '#fbfaf6'); // the panel colour (--paper in quick.css)
+// GPU compositing: true / false, or null until Chromium has told us (~150 ms after start; before that it reads as off)
+let gpuKnown = false;
+const gpuOn = () => {
+  if (!gpuKnown) return null;
   try {
     return String(app.getGPUFeatureStatus().gpu_compositing || '').startsWith('enabled');
   } catch {
-    return true;
+    return null;
   }
+};
+const plainForced = () => !!(flag('--plain-quick') || state.plainQuick); // the user asked for the plain window
+function canBeTransparent() {
+  if (plainForced()) return false;
+  if (SHOT || process.platform !== 'win32') return true;
+  return gpuOn() !== false;
 }
-// The GPU state is only known ~150 ms after start (it reads as off before that), so swap the window when it arrives
-function syncQuickMode() {
-  if (SHOT || !quick || quick.isDestroyed() || quick.isVisible()) return;
-  if (!canBeTransparent() === quickSolid) return;
+function rebuildQuick() {
   quick.destroy();
   createQuick();
 }
-app.on('gpu-info-update', syncQuickMode);
+// Swap the window when the GPU answer arrives (only while it's hidden)
+function syncQuickMode() {
+  if (SHOT || !quick || quick.isDestroyed() || quick.isVisible()) return;
+  if (!canBeTransparent() !== quickPlain) rebuildQuick();
+}
+app.on('gpu-info-update', () => {
+  gpuKnown = true;
+  syncQuickMode();
+  send('quick:plain', plainInfo()); // the settings show the real GPU state once it is known
+});
+// Settings switch: some PCs draw the dark box even with a working GPU
+const plainInfo = () => ({ on: plainForced(), gpu: gpuOn() });
+ipcMain.handle('quick:plain:get', () => plainInfo());
+ipcMain.handle('quick:plain:set', (_e, on) => {
+  state.plainQuick = !!on;
+  saveState();
+  if (quick && !quick.isDestroyed() && !quick.isVisible()) rebuildQuick();
+  return plainInfo();
+});
 function createQuick() {
-  quickSolid = !canBeTransparent();
+  quickPlain = !canBeTransparent();
   quick = new BrowserWindow({
     width: quickW(),
     height: 72,
     frame: false,
-    transparent: !quickSolid,
-    ...(quickSolid ? { backgroundColor: quickBg() } : {}),
+    transparent: !quickPlain,
+    ...(quickPlain ? { backgroundColor: quickBg() } : {}),
     resizable: false,
     movable: false,
     minimizable: false,
@@ -889,7 +911,7 @@ function createQuick() {
     webPreferences: webPrefs,
   });
   quick.setAlwaysOnTop(true, 'pop-up-menu');
-  quick.loadFile(path.join(__dirname, 'renderer', 'quick.html'), quickSolid ? { query: { solid: '1' } } : undefined);
+  quick.loadFile(path.join(__dirname, 'renderer', 'quick.html'), quickPlain ? { query: { plain: '1' } } : undefined);
   lockDown(quick);
   quick.on('blur', () => !SHOT && hideQuick());
   quick.on('close', (e) => {
@@ -907,7 +929,7 @@ function showQuick() {
   // Open on the screen where the mouse is, a bit above the middle
   const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   quick.setPosition(Math.round(d.x + (d.width - quickW()) / 2), Math.round(d.y + d.height * 0.22));
-  if (quickSolid) quick.setBackgroundColor(quickBg()); // theme may have changed
+  if (quickPlain) quick.setBackgroundColor(quickBg()); // theme may have changed
   quick.webContents.send('quick:open');
   quick.show();
   quick.focus();
@@ -924,8 +946,8 @@ function toggleQuick() {
 ipcMain.handle('quick:resize', (_e, h) => {
   if (!quick || quick.isDestroyed()) return;
   const [x, y] = quick.getPosition();
-  const pad = quickSolid ? 0 : QUICK_PAD.h;
-  quick.setBounds({ x, y, width: quickW(), height: Math.max(48, Math.min(620 - pad, Math.round(h))) + pad });
+  const pad = quickPlain ? 0 : QUICK_PAD.h;
+  quick.setBounds({ x, y, width: quickW(), height: Math.max(48, Math.min(QUICK_MAX_PANEL, Math.round(h))) + pad });
 });
 ipcMain.handle('quick:hide', () => hideQuick());
 ipcMain.handle('quick:openMain', () => {
@@ -965,10 +987,11 @@ function setLang(l) {
 ipcMain.handle('lang:get', () => I18N.getLang());
 
 // window background behind the page, so there is no dark flash in light mode
-const bgColor = () => {
+const isDark = () => {
   const t = state.theme || 'dark';
-  return (t === 'system' ? nativeTheme.shouldUseDarkColors : t === 'dark') ? '#141210' : '#f4f1ea';
+  return t === 'system' ? nativeTheme.shouldUseDarkColors : t === 'dark';
 };
+const bgColor = () => (isDark() ? '#141210' : '#f4f1ea');
 function setTheme(t) {
   state.theme = ['dark', 'light', 'system'].includes(t) ? t : 'dark';
   saveState();

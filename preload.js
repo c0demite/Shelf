@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('hub', {
   uninstall: (id) => ipcRenderer.invoke('item:uninstall', id),
   icon: (id) => ipcRenderer.invoke('icon:get', id),
   hotkey: () => ipcRenderer.invoke('app:hotkey'),
+  getPlainQuick: () => ipcRenderer.invoke('quick:plain:get'),
+  setPlainQuick: (on) => ipcRenderer.invoke('quick:plain:set', on),
   getAutostart: () => ipcRenderer.invoke('autostart:get'),
   setAutostart: (on) => ipcRenderer.invoke('autostart:set', on),
   getLang: () => ipcRenderer.invoke('lang:get'),

@@ -1,6 +1,6 @@
 'use strict';
 // a plain (not see-through) window: drop the room left for the shadow
-if (new URLSearchParams(location.search).get('solid')) document.documentElement.classList.add('solid');
+if (new URLSearchParams(location.search).get('plain')) document.documentElement.classList.add('plain');
 // Quick launcher (Ctrl+Space): type, arrows, Enter.
 
 const api = window.hub;

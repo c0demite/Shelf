@@ -1113,6 +1113,20 @@ api.on('lang:changed', (l) => {
   render();
 });
 
+// plain quick-search window (for PCs that draw a dark box around the see-through one)
+const plainSwitch = $('#plainQuick');
+let plainState = null; // { on, gpu: true | false | null while unknown }
+function showPlain(s = plainState) {
+  plainState = s;
+  if (!s) return;
+  plainSwitch.checked = s.on;
+  $('#plainHint').textContent = [t('set.plainHint'), s.gpu == null ? '' : t(s.gpu ? 'set.gpuOn' : 'set.gpuOff')].join(' ').trim();
+}
+api.on('quick:plain', showPlain);
+api.on('lang:changed', () => showPlain());
+api.getPlainQuick().then(showPlain);
+plainSwitch.addEventListener('change', async () => showPlain(await api.setPlainQuick(plainSwitch.checked)));
+
 // start-with-Windows switch
 const auto = $('#autostart');
 api.getAutostart().then((on) => (auto.checked = on));
