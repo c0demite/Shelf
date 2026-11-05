@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('hub', {
   uninstall: (id) => ipcRenderer.invoke('item:uninstall', id),
   icon: (id) => ipcRenderer.invoke('icon:get', id),
   hotkey: () => ipcRenderer.invoke('app:hotkey'),
+  recordHotkey: (on) => ipcRenderer.invoke('hotkey:record', on),
+  setHotkey: (acc) => ipcRenderer.invoke('hotkey:set', acc),
   copyDiagnostics: () => ipcRenderer.invoke('diag:copy'),
   reportProblem: () => ipcRenderer.invoke('diag:report'),
   getPlainQuick: () => ipcRenderer.invoke('quick:plain:get'),

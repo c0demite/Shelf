@@ -6,17 +6,18 @@ const { pathToFileURL } = require('url');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { scanAll } = require('./src/scanner');
-const { norm } = require('./src/util');
 const Icons = require('./src/icons');
 const { createProcessRules, runningExes, focusWindow } = require('./src/processes');
 const { createPlaytime } = require('./src/playtime');
 const { createInspector } = require('./src/inspect');
-const { updateCovers, storeSearch, GENERIC_NAMES } = require('./src/covers');
+const { updateCovers, storeSearch } = require('./src/covers');
+const { createLibrary } = require('./src/library');
 const { removeLeftovers } = require('./src/leftovers');
 const { createUpdates } = require('./src/updates');
 const { createQuickWindow } = require('./src/quick-window');
 const { launch } = require('./src/launch');
 const { diagnosticsReport } = require('./src/diagnostics');
+const { createHotkey } = require('./src/hotkey');
 const I18N = require('./renderer/i18n');
 const t = I18N.t;
 
@@ -70,7 +71,7 @@ function loadState() {
     state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
     delete state.icons; // old low-quality icon cache
   } catch {}
-  state.items = withManual(state.items);
+  library.replaceScan(state.items);
   I18N.setLang(state.lang || 'en');
 }
 let saveTimer = null;
@@ -90,32 +91,11 @@ function saveState() {
 const send = (ch, data) =>
   BrowserWindow.getAllWindows().forEach((w) => !w.isDestroyed() && w.webContents.send(ch, data));
 
-function view(it) {
-  const ov = state.overrides[it.id] || {};
-  const c = state.covers[norm(it.name)];
-  const auto = it.steamAppId || (typeof c === 'string' && !GENERIC_NAMES.has(norm(it.name)) ? c : null);
-  const cover = ov.coverFile ? null : ov.coverAppId || auto;
-  return {
-    ...it,
-    category: ov.category || it.category,
-    autoCategory: it.category,
-    fav: !!ov.fav,
-    hidden: ov.hidden != null ? ov.hidden : !!it.autoHidden,
-    launches: ov.launches || 0,
-    // Steam counts its own games; everything else is timed by Shelf
-    playtime: it.source === 'steam' ? it.playtime || null : ov.played || it.playtime || null,
-    playing: playtime.isPlaying(it.id),
-    shelves: (ov.shelves || []).filter((s) => (state.shelves || []).some((x) => x.id === s)),
-    lastLaunch: Math.max(ov.lastLaunch || 0, it.lastPlayed || 0) || null,
-    coverAppId: cover || null,
-    coverHeader: (cover && state.headers[cover]) || null,
-    coverFile: ov.coverFile ? 'shelf://cover/' + encodeURIComponent(ov.coverFile) : null,
-    customCover: !!(ov.coverFile || ov.coverAppId),
-  };
-}
-
+// what the scan found + what the user changed; playtime is defined below and only asked later
+const library = createLibrary({ state: () => state, isPlaying: (id) => playtime.isPlaying(id) });
+const { find } = library;
 const payload = () => ({
-  items: state.items.map(view),
+  items: library.views(),
   lastScan: state.lastScan,
   scanning,
   scanText,
@@ -123,14 +103,7 @@ const payload = () => ({
   theme: state.theme || 'dark',
   shelves: state.shelves || [],
 });
-const find = (id) => state.items.find((i) => i.id === id);
 const pushItems = () => send('library:items', payload());
-function markLaunched(id) {
-  const ov = (state.overrides[id] ||= {});
-  ov.lastLaunch = Date.now();
-  ov.launches = (ov.launches || 0) + 1;
-}
-
 // ---------- running processes and playtime ----------
 const readShortcut = (lnk) => {
   try {
@@ -151,13 +124,9 @@ const PLAY_TICK = 60e3;
 async function trackPlaytime() {
   const procs = await runningExes();
   if (!procs) return;
-  const { played, started, changed } = playtime.tick(state.items.map(view), procs);
-  for (const id of played) {
-    const ov = (state.overrides[id] ||= {});
-    ov.played = (ov.played || 0) + 1;
-    ov.lastLaunch = Date.now();
-  }
-  for (const id of started) (state.overrides[id] ||= {}).lastLaunch = Date.now();
+  const { played, started, changed } = playtime.tick(library.views(), procs);
+  library.played(played);
+  library.opened(started);
   if (played.length || started.length) saveState();
   if (changed || played.length || started.length) pushItems();
 }
@@ -174,7 +143,7 @@ async function doScan() {
   try {
     const res = await scanAll({ shell, progress: status });
     res.items = res.items.filter((it) => !rules.isSelf(it));
-    state.items = withManual(res.items);
+    library.replaceScan(res.items);
     state.drives = res.drives;
     state.lastScan = Date.now();
     saveState();
@@ -196,7 +165,7 @@ async function fetchCovers() {
   coversRunning = true;
   try {
     const changed = await updateCovers({
-      games: () => state.items.map(view).filter((i) => i.category === 'game'),
+      games: () => library.views().filter((i) => i.category === 'game'),
       covers: state.covers,
       headers: state.headers,
       onChange: pushItems,
@@ -225,10 +194,10 @@ ipcMain.handle('item:launch', async (_e, id) => {
   try {
     const focused = await focusRunning(it);
     if (!focused) await launch(it);
-    markLaunched(id);
+    library.launched(id);
     saveState();
     pushItems(); // keep every window's "Recent" in sync
-    return { ok: true, item: view(it), focused };
+    return { ok: true, item: library.view(it), focused };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -236,7 +205,7 @@ ipcMain.handle('item:launch', async (_e, id) => {
 
 // A whole shelf, one by one. Apps that already have a window are skipped.
 async function launchShelf(sid) {
-  const list = state.items.map(view).filter((i) => (i.shelves || []).includes(sid) && !i.leftover && i.canLaunch);
+  const list = library.views().filter((i) => (i.shelves || []).includes(sid) && !i.leftover && i.canLaunch);
   const res = { total: list.length, launched: 0, running: 0, failed: 0 };
   if (!list.length) return res;
   const procs = await runningExes();
@@ -248,7 +217,7 @@ async function launchShelf(sid) {
     try {
       if (res.launched) await new Promise((r) => setTimeout(r, 500)); // don't start everything in the same instant
       await launch(find(it.id));
-      markLaunched(it.id);
+      library.launched(it.id);
       res.launched++;
     } catch {
       res.failed++;
@@ -261,24 +230,19 @@ async function launchShelf(sid) {
 ipcMain.handle('shelf:launch', (_e, sid) => launchShelf(String(sid)));
 
 ipcMain.handle('item:override', (_e, id, patch) => {
-  const it = find(id);
-  if (!it) return null;
-  const ov = (state.overrides[id] = { ...(state.overrides[id] || {}), ...patch });
-  if (ov.category === it.category) delete ov.category;
+  const v = library.override(id, patch);
+  if (!v) return null;
   saveState();
   if (patch.category === 'game') fetchCovers();
-  return view(it);
+  return v;
 });
 
 // Custom shelves (collections): the window sends the whole list, [{ id, name }]
 ipcMain.handle('shelves:save', (_e, list) => {
-  state.shelves = (Array.isArray(list) ? list : [])
-    .filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string')
-    .map((s) => ({ id: s.id.slice(0, 40), name: s.name.trim().slice(0, 60) }))
-    .filter((s) => s.name);
+  const shelves = library.saveShelves(list);
   saveState();
   pushItems();
-  return state.shelves;
+  return shelves;
 });
 
 ipcMain.handle('item:openFolder', (_e, id) => {
@@ -299,27 +263,12 @@ ipcMain.handle('item:uninstall', (_e, id) => {
 
 // ---------- added by hand ----------
 const inspectFile = createInspector({ readShortcut });
-const samePath = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
-function withManual(list) {
-  const manual = (state.manual || []).filter((m) => !list.some((i) => i.id === m.id || (m.exe && samePath(i.exe, m.exe))));
-  return [...list, ...manual];
-}
-
 async function addManual({ path: file, name, category }) {
   const info = await inspectFile(file);
   if (!info) return { error: 'file' };
   const ext = path.extname(file).toLowerCase();
   const exe = ext === '.exe' || ext === '.bat' || ext === '.cmd' ? file : null;
-  const dup = exe && state.items.find((i) => samePath(i.exe, exe) && !i.leftover);
-  if (dup) {
-    // already on the shelf – just make sure it is visible
-    const ov = (state.overrides[dup.id] ||= {});
-    if (ov.hidden || dup.autoHidden) ov.hidden = false;
-    saveState();
-    pushItems();
-    return { exists: true, item: view(dup) };
-  }
-  const it = {
+  const res = library.addManual({
     id: 'manual:' + crypto.createHash('sha1').update(file.toLowerCase()).digest('hex').slice(0, 12),
     name: String(name || info.name).trim().slice(0, 80) || info.name,
     category: category === 'game' ? 'game' : 'app',
@@ -332,14 +281,13 @@ async function addManual({ path: file, name, category }) {
     installDir: info.dir || undefined,
     installDate: Date.now(),
     canLaunch: true,
-  };
-  state.manual = [...(state.manual || []).filter((m) => m.id !== it.id), it];
-  state.items = withManual(state.items.filter((i) => i.id !== it.id));
+  });
   saveState();
   pushItems();
+  if (res.exists) return res; // already on the shelf – now visible again
   extractIcons();
-  if (it.category === 'game') fetchCovers();
-  return { item: view(it) };
+  if (res.item.category === 'game') fetchCovers();
+  return res;
 }
 
 const ADD_FILTERS = () => [{ name: t('add.filter'), extensions: ['exe', 'lnk', 'url', 'bat', 'cmd'] }];
@@ -350,12 +298,9 @@ ipcMain.handle('add:pick', async () => {
 ipcMain.handle('add:inspect', (_e, file) => inspectFile(file));
 ipcMain.handle('add:save', (_e, data) => (data && typeof data === 'object' ? addManual(data) : { error: 'file' }));
 ipcMain.handle('item:remove', (_e, id) => {
-  if (!String(id).startsWith('manual:')) return false;
-  state.manual = (state.manual || []).filter((m) => m.id !== id);
-  state.items = state.items.filter((i) => i.id !== id);
-  const f = state.overrides[id]?.coverFile;
-  if (f) fs.rm(path.join(COVER_DIR, f), () => {});
-  delete state.overrides[id];
+  const { removed, unusedFile } = library.removeManual(id);
+  if (!removed) return false;
+  dropCoverFile(unusedFile);
   saveState();
   pushItems();
   return true;
@@ -372,18 +317,15 @@ ipcMain.handle('cover:search', async (_e, q) => {
     return null; // offline
   }
 });
+const dropCoverFile = (f) => f && fs.rm(path.join(COVER_DIR, path.basename(f)), () => {});
 function setCover(id, patch) {
-  const it = find(id);
-  if (!it) return null;
-  const ov = (state.overrides[id] ||= {});
-  if (ov.coverFile && patch.coverFile !== ov.coverFile) fs.rm(path.join(COVER_DIR, ov.coverFile), () => {});
-  delete ov.coverFile;
-  delete ov.coverAppId;
-  Object.assign(ov, patch);
+  const res = library.setCover(id, patch);
+  if (!res) return null;
+  dropCoverFile(res.unusedFile);
   saveState();
-  if (ov.coverAppId) fetchCovers(); // header art for the "Recent" card
+  if (patch.coverAppId) fetchCovers(); // header art for the "Recent" card
   pushItems();
-  return view(it);
+  return res.view;
 }
 ipcMain.handle('cover:set', async (_e, id, choice) => {
   if (!find(id)) return null;
@@ -411,7 +353,7 @@ const BACKUP_DIR = path.join(userDir, 'backups');
 ipcMain.handle('leftover:remove', async (_e, ids) => {
   const list = (Array.isArray(ids) ? ids.map(String) : []).map(find).filter((it) => it && it.leftover);
   const res = await removeLeftovers(list, { backupRoot: BACKUP_DIR, trash: (d) => shell.trashItem(d) });
-  state.items = state.items.filter((i) => !res.removed.has(i.id));
+  library.remove(res.removed);
   saveState();
   pushItems();
   res.tooBig.forEach((d) => shell.openPath(d)); // too big for the Recycle Bin – left to the user
@@ -484,7 +426,6 @@ const webPrefs = {
 };
 let quitting = false;
 let tray = null;
-let hotkey = null;
 
 function lockDown(w) {
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -556,7 +497,7 @@ ipcMain.handle('quick:openMain', () => {
   quick.hide();
   showMain();
 });
-ipcMain.handle('app:hotkey', () => hotkey);
+ipcMain.handle('app:hotkey', () => hotkey.info());
 
 // ---------- bug reports ----------
 // Settings: copy info about this PC (no names or paths), or copy it and open the GitHub form
@@ -572,7 +513,7 @@ function copyDiagnostics() {
     plainSetting: !!state.plainQuick,
     // real pixels, as people know their screens
     displays: screen.getAllDisplays().map((d) => ({ width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor), scaleFactor: d.scaleFactor })),
-    items: state.items.map(view),
+    items: library.views(),
     lastScan: state.lastScan,
   });
   clipboard.writeText(text);
@@ -630,27 +571,58 @@ function setTheme(t) {
 ipcMain.handle('theme:set', (_e, t) => setTheme(t));
 ipcMain.handle('lang:set', (_e, l) => setLang(l));
 
-// Ctrl+Space can be taken by the keyboard-language switcher – fall back if so
-const HOTKEYS = ['Control+Space', 'Control+Alt+Space', 'Alt+Shift+Space'];
-function registerHotkey() {
-  for (const k of HOTKEYS) {
-    try {
-      if (globalShortcut.register(k, quick.toggle)) {
-        hotkey = k.replace('Control', 'Ctrl');
-        console.log('hotkey:', k);
-        return;
-      }
-    } catch {}
-  }
-  hotkey = null;
+// The quick search shortcut: the user's own, or the first free default
+// (Ctrl+Space can be taken by the keyboard-language switcher)
+const hotkey = createHotkey({
+  register: (k, fn) => globalShortcut.register(k, fn),
+  unregister: (k) => globalShortcut.unregister(k),
+  defaults: ['Control+Space', 'Control+Alt+Space', 'Alt+Shift+Space'],
+  onPress: () => quick.toggle(),
+});
+const hotkeyLabel = () => {
+  const k = hotkey.info().current;
+  return k && I18N.keyLabel(k);
+};
+function hotkeyChanged() {
+  refreshTrayMenu();
+  send('hotkey:changed', hotkey.info());
 }
+// Settings: while a new shortcut is being recorded the old one is off.
+// If the settings never finish, it comes back by itself after 20 s and the settings are told.
+let recordTimer = null;
+function stopRecording() {
+  clearTimeout(recordTimer);
+  recordTimer = null;
+  hotkey.resume();
+}
+ipcMain.handle('hotkey:record', (_e, on) => {
+  if (!on) return stopRecording();
+  clearTimeout(recordTimer);
+  hotkey.pause();
+  recordTimer = setTimeout(() => {
+    stopRecording();
+    send('hotkey:recordEnd');
+  }, 20e3);
+});
+// own: an accelerator ("Control+Alt+K"), or null for the default. { ok, current, chosen, taken }
+// A taken shortcut leaves recording on, so the user can press another one.
+ipcMain.handle('hotkey:set', (_e, own) => {
+  if (own != null && !(typeof own === 'string' && /^[\w+]{1,40}$/.test(own))) return { ok: false, ...hotkey.info() };
+  const ok = hotkey.choose(own || null);
+  if (!ok) return { ok, ...hotkey.info() };
+  if (recordTimer) stopRecording();
+  state.hotkey = own || null;
+  saveState();
+  hotkeyChanged();
+  return { ok, ...hotkey.info() };
+});
 
 function trayMenu() {
   const ready = updates.readyVersion();
   return Menu.buildFromTemplate([
     ...(ready ? [{ label: t('tray.update', ready), click: installUpdate }, { type: 'separator' }] : []),
     { label: t('tray.open'), click: showMain },
-    { label: t('tray.quick') + (hotkey ? `\t${I18N.keyLabel(hotkey)}` : ''), click: quick.show },
+    { label: t('tray.quick') + (hotkeyLabel() ? `\t${hotkeyLabel()}` : ''), click: quick.show },
     { label: t('tray.rescan'), click: () => doScan() },
     { type: 'separator' },
     { label: t('tray.auto'), type: 'checkbox', checked: getAutostart(), click: (m) => setAutostart(m.checked) },
@@ -670,7 +642,7 @@ function createTray() {
 function refreshTrayMenu() {
   if (tray) {
     tray.setContextMenu(trayMenu());
-    tray.setToolTip(t('tray.tip', hotkey && I18N.keyLabel(hotkey)));
+    tray.setToolTip(t('tray.tip', hotkeyLabel()));
   }
   send('autostart:changed', getAutostart());
 }
@@ -739,7 +711,7 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
       else createWindow();
       return;
     }
-    registerHotkey();
+    hotkey.start(state.hotkey);
     // Self-heal: if the folder moved, point the Windows entry at the new location
     dropOldLoginItem(); // no-op once it is gone
     if (flag('--enable-autostart') || (state.autostart && !getAutostart())) setAutostart(true);

@@ -676,4 +676,5 @@ async function scanAll({ shell, progress = () => {} } = {}) {
   return { items, drives, ms: Date.now() - t0 };
 }
 
-module.exports = { scanAll };
+// scanFolders, merge and classify are the steps of a scan, exported for the tests
+module.exports = { scanAll, scanFolders, merge, classify };

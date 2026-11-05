@@ -89,8 +89,12 @@
         <input type="checkbox" id="autostart" /><span class="sw"></span>
       </label>
 
-      <div class="pop-row">
+      <div class="pop-row stack">
         <div><div class="pop-lbl" data-i18n="set.shortcut"></div><div class="pop-hint" id="hotkeyHint"></div></div>
+        <div class="pop-btns">
+          <button class="btn ghost" id="hkReset" data-i18n="set.hkReset" hidden></button>
+          <button class="btn" id="hkBtn" data-i18n="set.hkChange"></button>
+        </div>
       </div>
 
       <label class="pop-row toggle">
@@ -163,6 +167,7 @@
 
     <script src="theme.js"></script>
     <script src="i18n.js"></script>
+    <script src="accelerator.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

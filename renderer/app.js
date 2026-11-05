@@ -24,7 +24,7 @@ const shelfOf = (cat) => (cat && cat.startsWith('shelf:') ? shelves.find((s) => 
 let scanning = false;
 let scanText = null; // [key, ...args] from the main process
 let lastScan = null;
-let hotkey = null;
+let hotkey = null; // { current, chosen, taken } – accelerators like "Control+Space"
 const view = { cat: 'all', source: null, q: '', sort: 'name', mode: 'grid' };
 try {
   const saved = JSON.parse(localStorage.getItem('view') || '{}');
@@ -971,6 +971,7 @@ document.addEventListener('mousedown', (e) => openDDs.forEach((d) => !d.root.con
 // ---------- settings popover ----------
 const pop = $('#settings');
 const togglePop = (show = pop.hidden) => {
+  if (!show) hkRecord(false);
   pop.hidden = !show;
   $('#setBtn').classList.toggle('on', show);
 };
@@ -984,11 +985,77 @@ $('#lang').addEventListener('click', async (e) => {
   if (b) await api.setLang(b.dataset.lang); // main broadcasts lang:changed
 });
 
+const kbds = (acc) => I18N.keyLabel(acc).split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('+');
+let hkRecording = false;
+let hkBusy = false; // a new shortcut is being saved
+let hkError = null; // translation key of the last refused key press
+// a translated text with <kbd> keys in it: fillKeys('set.hotkey', 'Control+Space')
+const fillKeys = (key, ...accs) => {
+  let html = esc(t(key, ...accs.map((_, i) => String.fromCharCode(i))));
+  accs.forEach((a, i) => (html = html.replace(String.fromCharCode(i), a ? kbds(a) : '–')));
+  return html;
+};
 function renderHotkey() {
-  $('#hotkeyHint').innerHTML = hotkey
-    ? esc(t('set.hotkey', '\u0000')).replace('\u0000', I18N.keyLabel(hotkey).split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('+'))
-    : esc(t('set.hotkeyTaken'));
+  const h = hotkey || {};
+  const hint = $('#hotkeyHint');
+  hint.classList.toggle('err', !!hkError);
+  if (hkRecording) hint.textContent = t(hkError || 'set.hkPress');
+  else if (h.taken) hint.innerHTML = fillKeys('set.hkTaken', h.chosen, h.current);
+  else if (h.current) hint.innerHTML = fillKeys('set.hotkey', h.current);
+  else hint.textContent = t('set.hotkeyTaken');
+  $('#hkBtn').textContent = t(hkRecording ? 'btn.cancel' : 'set.hkChange');
+  $('#hkBtn').classList.toggle('rec', hkRecording);
+  $('#hkReset').hidden = hkRecording || !h.chosen;
 }
+// Recording a new shortcut: the next key press with Ctrl or Alt
+function hkRecord(on) {
+  if (hkRecording === on) return;
+  hkRecording = on;
+  hkError = null;
+  api.recordHotkey(on);
+  renderHotkey();
+}
+$('#hkBtn').addEventListener('click', () => hkRecord(!hkRecording));
+$('#hkReset').addEventListener('click', async () => {
+  hotkey = await api.setHotkey(null);
+  renderHotkey();
+});
+window.addEventListener(
+  'keydown',
+  async (e) => {
+    if (!hkRecording) return;
+    e.preventDefault();
+    e.stopPropagation(); // not Ctrl+F search, not Escape closing the settings
+    if (hkBusy) return;
+    const r = Accelerator.fromKey(e);
+    if (!r) return; // only modifiers so far
+    if (r.cancel) return hkRecord(false);
+    if (r.error) {
+      hkError = 'set.hkErr.' + r.error;
+      return renderHotkey();
+    }
+    hkBusy = true;
+    const res = await api.setHotkey(r.accelerator);
+    hkBusy = false;
+    hotkey = res;
+    // taken: stay in recording, so another one can be tried
+    hkRecording = !res.ok;
+    hkError = res.ok ? null : 'set.hkErr.busy';
+    if (res.ok) toast(t('toast.hotkey', I18N.keyLabel(res.current)));
+    renderHotkey();
+  },
+  true
+);
+// nothing pressed for 20 s: main turned the old shortcut back on
+api.on('hotkey:recordEnd', () => {
+  hkRecording = false;
+  hkError = null;
+  renderHotkey();
+});
+api.on('hotkey:changed', (h) => {
+  hotkey = h;
+  renderHotkey();
+});
 
 // ---------- events ----------
 const content = $('#content');

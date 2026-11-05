@@ -33,7 +33,7 @@ After a few years every PC turns into an attic. Games live in four different lau
 - **Finds everything, on every drive.** The Windows registry, Steam (every library, even games Steam no longer sees), Epic Games, GOG, Ubisoft Connect, Xbox / Game Pass, Microsoft Store apps, Start menu and desktop shortcuts, and a light scan of folders on all drives. Developer projects are skipped.
 - **Games and apps, sorted for you.** Shelf tells games from apps on its own. If it gets one wrong, fix it with a right-click.
 - **Real cover art.** Tall covers from the Steam store, also for games you didn't buy on Steam. Apps get their real, sharp Windows icons.
-- **Quick launcher.** Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> anywhere, type two letters, hit <kbd>Enter</kbd>. Initials work too: `ms` finds *Marvel's Spider-Man*.
+- **Quick launcher.** Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> anywhere, type two letters, hit <kbd>Enter</kbd>. Initials work too: `ms` finds *Marvel's Spider-Man*. Prefer another shortcut? Change it in Settings.
 - **Add anything by hand.** Shelf missed something? Click **Add** or drop an .exe or a shortcut onto the window.
 - **Pick your own cover.** Search Steam for any cover art, or use a picture from your disk.
 - **Already open? It comes to the front.** Launching an app that is already running shows its window instead of doing nothing.
@@ -81,7 +81,7 @@ After a few years every PC turns into an attic. Games live in four different lau
 
 | Where | Shortcut | Action |
 | --- | --- | --- |
-| Anywhere | <kbd>Ctrl</kbd>+<kbd>Space</kbd> | Open the quick launcher (falls back to <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> if taken) |
+| Anywhere | <kbd>Ctrl</kbd>+<kbd>Space</kbd> | Open the quick launcher – change it in Settings (if another program has it, Shelf falls back to <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd>) |
 | Quick launcher | <kbd>↑</kbd> <kbd>↓</kbd> / <kbd>Enter</kbd> | Pick / launch |
 | Quick launcher | <kbd>Shift</kbd>+<kbd>Enter</kbd> | Open the install folder |
 | Library | just start typing, or <kbd>Ctrl</kbd>+<kbd>F</kbd> / <kbd>/</kbd> | Search |
