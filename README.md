@@ -147,9 +147,10 @@ Contributions of any size are welcome – a bug report, a translation, a new lau
 
 1. Fork the repo and create a branch: `git checkout -b my-change`
 2. `npm install && npm start`, make your change, and check it in both themes and both languages
-3. Open a pull request with a short description and, for anything visual, a screenshot
+3. Run `npm test` (Node's built-in test runner, tests in `test/`)
+4. Open a pull request with a short description and, for anything visual, a screenshot
 
-If Shelf misses or misclassifies something on your PC, an issue with the app name and its install path helps the most.
+Found a bug? Open Settings → **Report on GitHub**: it copies info about your setup (no program names or paths) and opens the bug form. If Shelf misses or misclassifies something on your PC, add the app name and its install path – that helps the most.
 
 ## License
 

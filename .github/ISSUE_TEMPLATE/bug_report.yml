@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Shelf doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time! Polish is fine too / Można pisać po polsku.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, and what did you see?
+      placeholder: I pressed Ctrl+Space and the search window had a dark box around it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic info
+      description: |
+        In Shelf open Settings (the sliders button, top right) → "Something wrong?" → **Copy info**, then paste it here.
+        It has no program names or paths, only versions, settings and counts.
+        Can't open Shelf? Write your Shelf version and Windows version instead.
+      render: text
+      placeholder: |
+        Shelf 0.5.2 (installed)
+        Windows: 10.0.26100 x64
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: If it's something you can see, drop a screenshot here (Win+Shift+S, then Ctrl+V).
+    validations:
+      required: false

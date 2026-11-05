@@ -25,7 +25,7 @@ let sel = 0;
 let msg = '';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const fold = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l');
+const { search, fold } = Search;
 const hue = (s) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
 
 function ago(ts) {
@@ -34,24 +34,6 @@ function ago(ts) {
   if (d < 1) return t('ago.h', Math.floor(d * 24));
   if (d < 2) return t('ago.yesterday');
   return t('ago.days', Math.floor(d));
-}
-
-// Higher = better. Prefix > word start > initials > substring.
-function score(it, q) {
-  const n = fold(it.name);
-  const words = n.split(/[^a-z0-9ąćęńóśźż]+/).filter(Boolean);
-  const initials = words.map((w) => w[0]).join('');
-  let s;
-  if (n.startsWith(q)) s = 100;
-  else if (words.some((w) => w.startsWith(q))) s = 80;
-  else if (q.length >= 2 && initials.startsWith(q)) s = 65;
-  else if (n.includes(q)) s = 45;
-  else if (q.split(/\s+/).every((t) => n.includes(t))) s = 35;
-  else return -1;
-  if (it.fav) s += 10;
-  if (it.lastLaunch) s += Math.max(0, 8 - (Date.now() - it.lastLaunch) / 864e5);
-  if (!it.canLaunch) s -= 25;
-  return s - n.length / 100;
 }
 
 // shelves show up as rows that start everything on them
@@ -75,13 +57,7 @@ function compute() {
     if (!groups.length) groups.push([t('q.games'), pool.filter((i) => i.category === 'game').slice(0, 8)]);
     return groups;
   }
-  const hits = [...pool, ...shelfRows()]
-    .map((i) => { const s = score(i, q); return [i, s >= 0 && i.shelf ? s + 5 : s]; })
-    .filter(([, s]) => s >= 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([i]) => i);
-  return [[null, hits]];
+  return [[null, search([...pool, ...shelfRows()], q)]];
 }
 
 function highlight(name, q) {

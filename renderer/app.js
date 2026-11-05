@@ -762,6 +762,16 @@ function renderUpdate() {
 }
 $('#updBtn').addEventListener('click', () => (upd.status === 'ready' ? api.installUpdate() : api.checkUpdate()));
 $('#updPill').addEventListener('click', () => api.installUpdate());
+
+// bug reports: info about this PC goes to the clipboard
+$('#diagCopy').addEventListener('click', async () => {
+  await api.copyDiagnostics();
+  toast(t('toast.diagCopied'));
+});
+$('#diagReport').addEventListener('click', async () => {
+  // the browser may not open; the info is on the clipboard either way
+  toast(t((await api.reportProblem()) ? 'toast.diagReport' : 'toast.diagCopied'));
+});
 api.on('update:status', (u) => {
   upd = u;
   renderUpdate();

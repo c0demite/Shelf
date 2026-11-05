@@ -1,12 +1,22 @@
-const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, screen, nativeTheme, dialog, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage, globalShortcut, nativeTheme, dialog, protocol, net, clipboard, screen } = require('electron');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const fs = require('fs');
-const { spawn, execFile } = require('child_process');
+const { spawn } = require('child_process');
 const { scanAll } = require('./src/scanner');
 const { norm } = require('./src/util');
 const Icons = require('./src/icons');
+const { createProcessRules, runningExes, focusWindow } = require('./src/processes');
+const { createPlaytime } = require('./src/playtime');
+const { createInspector } = require('./src/inspect');
+const { updateCovers, storeSearch, GENERIC_NAMES } = require('./src/covers');
+const { removeLeftovers } = require('./src/leftovers');
+const { createUpdates } = require('./src/updates');
+const { createQuickWindow } = require('./src/quick-window');
+const { launch } = require('./src/launch');
+const { diagnosticsReport } = require('./src/diagnostics');
 const I18N = require('./renderer/i18n');
 const t = I18N.t;
 
@@ -94,7 +104,7 @@ function view(it) {
     launches: ov.launches || 0,
     // Steam counts its own games; everything else is timed by Shelf
     playtime: it.source === 'steam' ? it.playtime || null : ov.played || it.playtime || null,
-    playing: playing.has(it.id),
+    playing: playtime.isPlaying(it.id),
     shelves: (ov.shelves || []).filter((s) => (state.shelves || []).some((x) => x.id === s)),
     lastLaunch: Math.max(ov.lastLaunch || 0, it.lastPlayed || 0) || null,
     coverAppId: cover || null,
@@ -113,127 +123,46 @@ const payload = () => ({
   theme: state.theme || 'dark',
   shelves: state.shelves || [],
 });
+const find = (id) => state.items.find((i) => i.id === id);
+const pushItems = () => send('library:items', payload());
+function markLaunched(id) {
+  const ov = (state.overrides[id] ||= {});
+  ov.lastLaunch = Date.now();
+  ov.launches = (ov.launches || 0) + 1;
+}
 
-// ---------- playtime ----------
-// Once a minute: which games have a running process inside their install folder?
-// Works no matter how the game was started (Shelf, launcher, desktop shortcut).
-let playing = new Set();
+// ---------- running processes and playtime ----------
+const readShortcut = (lnk) => {
+  try {
+    return shell.readShortcutLink(lnk).target || null;
+  } catch {
+    return null;
+  }
+};
+// Shelf should not list or watch itself (installed copy, or Electron when run from source)
+const rules = createProcessRules({
+  sysRoot: process.env.SystemRoot || 'C:\\Windows',
+  selfDirs: [path.dirname(process.execPath), __dirname],
+  readShortcut,
+});
+const playtime = createPlaytime(rules);
 const PLAY_TICK = 60e3;
-// The folder whose processes belong to an item – or null when it's too broad to tell:
-// a whole drive, C:\Windows, a shared container like "D:\Games", or Shelf itself.
-// Games often sit right under a drive ("F:\Satisfactory"), so one level is fine unless it's a container.
-const CONTAINERS = new Set(['games', 'game', 'gry', 'program files', 'program files (x86)', 'programdata', 'steam', 'steamlibrary', 'xboxgames', 'epic games', 'gog games', 'gog galaxy', 'riot games', 'ubisoft', 'ea games', 'users', 'windows', 'apps', 'programs', 'programy', 'tools', 'portable', 'downloads', 'pobrane', 'desktop']);
-const SYS_ROOT = path.normalize(process.env.SystemRoot || 'C:\\Windows').toLowerCase();
-function watchDir(it) {
-  const dirs = [it.installDir, it.exe && path.dirname(it.exe)];
-  if (!it.installDir && !it.exe && it.lnk) {
-    try {
-      const target = shell.readShortcutLink(it.lnk).target;
-      if (target) dirs.push(path.dirname(target));
-    } catch {}
-  }
-  for (const dir of dirs) {
-    if (!dir) continue;
-    const d = path.normalize(dir).toLowerCase().replace(/[\\/]+$/, '');
-    if (d === SYS_ROOT || d.startsWith(SYS_ROOT + path.sep)) return null; // system tools share one folder
-    if (SELF_DIRS.some((s) => (d + path.sep).startsWith(s))) return null;
-    const parts = d.split(path.sep).filter(Boolean);
-    if (parts.length >= 3 || (parts.length === 2 && !CONTAINERS.has(parts[1]))) return d + path.sep;
-  }
-  return null;
-}
-function gameDirs() {
-  return state.items
-    .map(view)
-    .filter((i) => i.category === 'game' && !i.leftover && !i.hidden)
-    .map((i) => ({ id: i.id, dir: watchDir(i) }))
-    .filter((g) => g.dir);
-}
-function runningExes() {
-  return new Promise((resolve) =>
-    execFile(
-      'powershell.exe',
-      // "1|path" for processes with a visible main window, "0|path" for the rest
-      ['-NoProfile', '-NonInteractive', '-Command', "Get-Process | Where-Object Path | ForEach-Object { [int]($_.MainWindowHandle -ne 0), $_.Path -join '|' }"],
-      { windowsHide: true, timeout: 20000, maxBuffer: 8 << 20 },
-      (err, out) => {
-        if (err) return resolve(null);
-        const lines = out.split(/\r?\n/).filter((s) => s[1] === '|');
-        resolve({ all: lines.map((s) => s.slice(2).toLowerCase()), windowed: lines.filter((s) => s[0] === '1').map((s) => s.slice(2).toLowerCase()) });
-      }
-    )
-  );
-}
-// Apps started outside Shelf (Start menu, taskbar): no playtime, only "last launched"
-// when a window from the app's folder shows up that wasn't there on the last tick.
-// Windowless helpers (updaters, git.exe calls, tray daemons) are ignored.
-let appsKnown = null; // app ids checked on the last tick (null = no tick yet)
-let appsRunning = new Set();
-function appMatchers() {
-  const out = [];
-  for (const i of state.items.map(view)) {
-    if (i.leftover || i.hidden || isSelf(i)) continue;
-    const d = watchDir(i);
-    if (d) out.push({ id: i.id, app: i.category === 'app', dir: d });
-    else if (i.exe && i.category === 'app' && !path.normalize(i.exe).toLowerCase().startsWith(SYS_ROOT + path.sep))
-      out.push({ id: i.id, app: true, exe: path.normalize(i.exe).toLowerCase() });
-  }
-  return out;
-}
-function runningApps(exes) {
-  const ms = appMatchers();
-  const now = new Set();
-  for (const e of exes) {
-    // most specific match wins, so a game inside the Steam folder doesn't count as Steam
-    let best = null;
-    for (const m of ms) {
-      if (m.exe ? e === m.exe : e.startsWith(m.dir)) {
-        const len = m.exe ? Infinity : m.dir.length;
-        if (!best || len > best.len) best = { m, len };
-      }
-    }
-    if (best && best.m.app) now.add(best.m.id);
-  }
-  return { now, known: new Set(ms.filter((m) => m.app).map((m) => m.id)) };
-}
-
+// Once a minute. Apps started outside Shelf (Start menu, taskbar) get no playtime, only "last launched".
 async function trackPlaytime() {
-  const games = gameDirs();
-  const exes = await runningExes();
-  if (!exes) return;
-  const now = new Set(games.filter((g) => exes.all.some((e) => e.startsWith(g.dir))).map((g) => g.id));
-  for (const id of now) {
+  const procs = await runningExes();
+  if (!procs) return;
+  const { played, started, changed } = playtime.tick(state.items.map(view), procs);
+  for (const id of played) {
     const ov = (state.overrides[id] ||= {});
     ov.played = (ov.played || 0) + 1;
     ov.lastLaunch = Date.now();
   }
-  const changed = now.size !== playing.size || [...now].some((id) => !playing.has(id));
-  playing = now;
-
-  // apps: first tick is only a baseline; later, newly started ones get a timestamp
-  const apps = runningApps(exes.windowed);
-  let started = 0;
-  if (appsKnown) {
-    for (const id of apps.now) {
-      if (appsKnown.has(id) && !appsRunning.has(id)) {
-        (state.overrides[id] ||= {}).lastLaunch = Date.now();
-        started++;
-      }
-    }
-  }
-  appsKnown = apps.known;
-  appsRunning = apps.now;
-
-  if (now.size || started) saveState();
-  if (changed || now.size || started) send('library:items', payload());
+  for (const id of started) (state.overrides[id] ||= {}).lastLaunch = Date.now();
+  if (played.length || started.length) saveState();
+  if (changed || played.length || started.length) pushItems();
 }
 
 // ---------- scanning ----------
-// Shelf should not list itself (installed copy, or Electron when run from source)
-const SELF_DIRS = [path.dirname(process.execPath), __dirname].map((d) => d.toLowerCase() + path.sep);
-const isSelf = (it) =>
-  [it.installDir, it.exe].some((p) => p && SELF_DIRS.some((d) => (p.toLowerCase() + path.sep).startsWith(d)));
-
 async function doScan() {
   if (scanning) return;
   scanning = true;
@@ -244,14 +173,14 @@ async function doScan() {
   status('scan.start');
   try {
     const res = await scanAll({ shell, progress: status });
-    res.items = res.items.filter((it) => !isSelf(it));
+    res.items = res.items.filter((it) => !rules.isSelf(it));
     state.items = withManual(res.items);
     state.drives = res.drives;
     state.lastScan = Date.now();
     saveState();
     scanning = false;
     status('scan.done', res.items.length, (res.ms / 1000).toFixed(1));
-    send('library:items', payload());
+    pushItems();
     await extractIcons();
     fetchCovers();
   } catch (e) {
@@ -261,170 +190,34 @@ async function doScan() {
 }
 
 // ---------- covers (Steam store art, also for non-Steam games) ----------
-// Misses are retried after a week (new releases, better matching)
-const GENERIC_NAMES = new Set(['launcher', 'game', 'games', 'client', 'app', 'start', 'play', 'setup', 'main', 'bin', 'gierka', 'gra']);
-const needsCover = (key) => {
-  if (key.length < 4 || GENERIC_NAMES.has(key)) return false;
-  const c = state.covers[key];
-  return c == null || (typeof c === 'object' && Date.now() - (c.miss || 0) > 7 * 864e5);
-};
 let coversRunning = false;
 async function fetchCovers() {
   if (coversRunning) return;
   coversRunning = true;
   try {
-    const todo = state.items
-      .map(view)
-      .filter((it) => it.category === 'game' && !it.steamAppId && !it.leftover && needsCover(norm(it.name)));
-    let changed = 0;
-    for (const it of todo) {
-      const key = norm(it.name);
-      try {
-        const r = await fetch(
-          `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(it.name)}&l=english&cc=US`,
-          { signal: AbortSignal.timeout(8000) }
-        );
-        const j = await r.json();
-        const hit = (j.items || []).find((x) => {
-          const n = norm(x.name);
-          if (n === key) return true;
-          const [a, b] = n.length < key.length ? [n, key] : [key, n];
-          if (a.length < 6) return false;
-          return (b.startsWith(a) && a.length / b.length >= 0.75) || (b.endsWith(a) && a.length / b.length >= 0.55);
-        });
-        state.covers[key] = hit ? String(hit.id) : { miss: Date.now() };
-        if (hit) changed++;
-      } catch {
-        // offline – try again next time
-      }
-      if (changed && changed % 5 === 0) send('library:items', payload());
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    // Real header image URL (newer games use hashed paths the CDN pattern can't guess)
-    const ids = [...new Set(state.items.map(view).filter((i) => i.category === 'game' && i.coverAppId).map((i) => i.coverAppId))];
-    for (const id of ids.filter((id) => !(id in state.headers))) {
-      try {
-        const r = await fetch(`https://store.steampowered.com/api/appdetails?appids=${id}&filters=basic`, {
-          signal: AbortSignal.timeout(8000),
-        });
-        const j = await r.json();
-        state.headers[id] = j?.[id]?.data?.header_image || null;
-        if (state.headers[id]) changed++;
-      } catch {}
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    const changed = await updateCovers({
+      games: () => state.items.map(view).filter((i) => i.category === 'game'),
+      covers: state.covers,
+      headers: state.headers,
+      onChange: pushItems,
+    });
     saveState();
-    if (changed) send('library:items', payload());
+    if (changed) pushItems();
   } finally {
     coversRunning = false;
   }
 }
 
 // ---------- launching ----------
-function launch(it) {
-  return new Promise((resolve, reject) => {
-    if (it.uri) return shell.openExternal(it.uri).then(resolve, reject);
-    if (it.aumid) {
-      spawn('explorer.exe', ['shell:AppsFolder\\' + it.aumid], { detached: true, stdio: 'ignore' }).unref();
-      return resolve();
-    }
-    if (it.lnk && fs.existsSync(it.lnk)) {
-      return shell.openPath(it.lnk).then((err) => (err ? reject(new Error(err)) : resolve()));
-    }
-    if (it.exe && fs.existsSync(it.exe)) {
-      const fallback = () => shell.openPath(it.exe).then((err) => (err ? reject(new Error(err)) : resolve()));
-      try {
-        const child = spawn(it.exe, [], { cwd: it.cwd || path.dirname(it.exe), detached: true, stdio: 'ignore' });
-        child.once('error', fallback); // e.g. needs admin rights
-        child.once('spawn', () => {
-          child.unref();
-          resolve();
-        });
-      } catch {
-        fallback();
-      }
-      return;
-    }
-    reject(new Error('Brak pliku do uruchomienia'));
-  });
-}
-
-// ---------- already running? bring it to the front ----------
-// Starting an app that is already open often does nothing visible (its window stays
-// behind others or minimized). If one of its processes has a window, show that instead.
-function runningMatch(it) {
-  const dir = watchDir(it);
-  if (dir) return { prefix: dir };
-  // folder too broad (e.g. "D:\Tools") – then only the exact exe counts
-  const exe = it.exe && path.normalize(it.exe).toLowerCase();
-  return exe && !exe.startsWith(SYS_ROOT + path.sep) ? { exact: exe } : null;
-}
-function focusRunning(it) {
-  const m = runningMatch(it);
-  if (!m) return Promise.resolve(false);
-  const test = m.prefix ? `$_.Path.ToLower().StartsWith(${psQuote(m.prefix)})` : `$_.Path.ToLower() -eq ${psQuote(m.exact)}`;
-  const script = `$p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -and (${test}) } | Sort-Object StartTime -Descending | Select-Object -First 1
-if (-not $p) { 'none'; exit }
-$dll = ${psQuote(path.join(userDir, 'shelfwin-1.dll'))}
-if (-not (Test-Path -LiteralPath $dll)) { Add-Type -OutputAssembly $dll -OutputType Library -TypeDefinition @'
-using System; using System.Runtime.InteropServices;
-public static class ShelfWin {
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
-  [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
-}
-'@ }
-Add-Type -LiteralPath $dll
-$h = $p.MainWindowHandle
-if ([ShelfWin]::IsIconic($h)) { [void][ShelfWin]::ShowWindow($h, 9) }
-[ShelfWin]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [ShelfWin]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
-[void][ShelfWin]::SetForegroundWindow($h)
-'ok'`;
-  return new Promise((resolve) =>
-    execFile('powershell.exe', psEncoded(script), { windowsHide: true, timeout: 8000 }, (err, out) => resolve(!err && /ok/.test(String(out))))
-  );
-}
-
-// ---------- IPC ----------
-const find = (id) => state.items.find((i) => i.id === id);
-
 ipcMain.handle('library:get', () => payload());
 ipcMain.handle('library:scan', () => {
   doScan();
   return true;
 });
 
-// ---------- launch a whole shelf ----------
-// Starts everything on a shelf, one by one. Apps that already have a window are skipped.
-async function launchShelf(sid) {
-  const list = state.items.map(view).filter((i) => (i.shelves || []).includes(sid) && !i.leftover && i.canLaunch);
-  const res = { total: list.length, launched: 0, running: 0, failed: 0 };
-  if (!list.length) return res;
-  const exes = await runningExes();
-  for (const it of list) {
-    const m = runningMatch(it);
-    if (exes && m && exes.windowed.some((e) => (m.prefix ? e.startsWith(m.prefix) : e === m.exact))) {
-      res.running++;
-      continue;
-    }
-    try {
-      if (res.launched) await new Promise((r) => setTimeout(r, 500)); // don't start everything in the same instant
-      await launch(find(it.id));
-      const ov = (state.overrides[it.id] ||= {});
-      ov.lastLaunch = Date.now();
-      ov.launches = (ov.launches || 0) + 1;
-      res.launched++;
-    } catch {
-      res.failed++;
-    }
-  }
-  saveState();
-  send('library:items', payload());
-  return res;
-}
-ipcMain.handle('shelf:launch', (_e, sid) => launchShelf(String(sid)));
+// Starting an app that is already open often does nothing visible (its window stays
+// behind others or minimized). If one of its processes has a window, show that instead.
+const focusRunning = (it) => focusWindow(rules.runningMatch(it), userDir);
 
 ipcMain.handle('item:launch', async (_e, id) => {
   const it = find(id);
@@ -432,16 +225,40 @@ ipcMain.handle('item:launch', async (_e, id) => {
   try {
     const focused = await focusRunning(it);
     if (!focused) await launch(it);
-    const ov = (state.overrides[id] = state.overrides[id] || {});
-    ov.lastLaunch = Date.now();
-    ov.launches = (ov.launches || 0) + 1;
+    markLaunched(id);
     saveState();
-    send('library:items', payload()); // keep every window's "Recent" in sync
+    pushItems(); // keep every window's "Recent" in sync
     return { ok: true, item: view(it), focused };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
+
+// A whole shelf, one by one. Apps that already have a window are skipped.
+async function launchShelf(sid) {
+  const list = state.items.map(view).filter((i) => (i.shelves || []).includes(sid) && !i.leftover && i.canLaunch);
+  const res = { total: list.length, launched: 0, running: 0, failed: 0 };
+  if (!list.length) return res;
+  const procs = await runningExes();
+  for (const it of list) {
+    if (procs && rules.isOpen(it, procs.windowed)) {
+      res.running++;
+      continue;
+    }
+    try {
+      if (res.launched) await new Promise((r) => setTimeout(r, 500)); // don't start everything in the same instant
+      await launch(find(it.id));
+      markLaunched(it.id);
+      res.launched++;
+    } catch {
+      res.failed++;
+    }
+  }
+  saveState();
+  pushItems();
+  return res;
+}
+ipcMain.handle('shelf:launch', (_e, sid) => launchShelf(String(sid)));
 
 ipcMain.handle('item:override', (_e, id, patch) => {
   const it = find(id);
@@ -460,67 +277,32 @@ ipcMain.handle('shelves:save', (_e, list) => {
     .map((s) => ({ id: s.id.slice(0, 40), name: s.name.trim().slice(0, 60) }))
     .filter((s) => s.name);
   saveState();
-  send('library:items', payload());
+  pushItems();
   return state.shelves;
 });
 
+ipcMain.handle('item:openFolder', (_e, id) => {
+  const it = find(id);
+  if (!it) return false;
+  if (it.installDir && fs.existsSync(it.installDir)) shell.openPath(it.installDir);
+  else if (it.exe && fs.existsSync(it.exe)) shell.showItemInFolder(it.exe);
+  else return false;
+  return true;
+});
+
+ipcMain.handle('item:uninstall', (_e, id) => {
+  const it = find(id);
+  if (it?.source === 'steam') return shell.openExternal('steam://uninstall/' + it.steamAppId).then(() => true);
+  // Let Windows handle uninstalling (it shows its own confirmation)
+  return shell.openExternal('ms-settings:appsfeatures').then(() => true);
+});
+
 // ---------- added by hand ----------
-// Games and apps Shelf didn't find: an .exe, a shortcut (.lnk) or an internet shortcut (.url, e.g. steam://)
-const ADD_EXT = /\.(exe|lnk|url|bat|cmd)$/i;
+const inspectFile = createInspector({ readShortcut });
 const samePath = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 function withManual(list) {
   const manual = (state.manual || []).filter((m) => !list.some((i) => i.id === m.id || (m.exe && samePath(i.exe, m.exe))));
   return [...list, ...manual];
-}
-const psJson = (script) =>
-  new Promise((resolve) =>
-    execFile('powershell.exe', psEncoded(script), { windowsHide: true, timeout: 15e3 }, (err, out) => {
-      try {
-        resolve(err ? null : JSON.parse(String(out)));
-      } catch {
-        resolve(null);
-      }
-    })
-  );
-const psQuote = (s) => "'" + String(s).replace(/'/g, "''") + "'";
-const prettyName = (file) =>
-  path
-    .basename(file, path.extname(file))
-    .replace(/[_.]+/g, ' ')
-    .replace(/(-|\s)(x64|x86|win64|win32|shipping)$/i, '')
-    .trim();
-
-// What would we add for this file? Name, launch target, folder, a guess at game vs app.
-async function inspectFile(file) {
-  if (typeof file !== 'string' || !ADD_EXT.test(file) || !fs.existsSync(file)) return null;
-  file = path.normalize(file);
-  const ext = path.extname(file).toLowerCase();
-  const info = { path: file, name: prettyName(file), category: 'app' };
-  let target = file;
-  if (ext === '.lnk') {
-    try {
-      target = shell.readShortcutLink(file).target || file;
-    } catch {}
-  } else if (ext === '.url') {
-    const txt = fs.readFileSync(file, 'utf8');
-    info.uri = (txt.match(/^URL=(.+)$/m) || [])[1]?.trim() || null;
-    if (!info.uri) return null;
-    const ico = (txt.match(/^IconFile=(.+)$/m) || [])[1]?.trim();
-    if (ico && fs.existsSync(ico)) info.iconPath = ico;
-    if (/^(steam|com\.epicgames\.launcher|uplay|goggalaxy|heroic|battlenet):/i.test(info.uri)) info.category = 'game';
-  }
-  if (/\.exe$/i.test(target) && fs.existsSync(target)) {
-    const v = await psJson(`$v=(Get-Item -LiteralPath ${psQuote(target)}).VersionInfo; @{p=$v.ProductName;d=$v.FileDescription} | ConvertTo-Json -Compress`);
-    // file description is usually the app's own name; product name can be the whole suite (e.g. 'Microsoft Windows')
-    const nice = [v?.d, v?.p]
-      .map((s) => String(s || '').replace(/[®™©]/g, '').trim())
-      .find((s) => s.length > 1 && !/^(launcher|game|application)$|operating system|system operacyjny/i.test(s));
-    if (nice && ext !== '.lnk') info.name = nice;
-    info.dir = path.dirname(target);
-    if (/\\(games?|steamapps|epic games|gog galaxy|riot games|ubisoft)\\/i.test(target)) info.category = 'game';
-  }
-  info.name = info.name.slice(0, 80);
-  return info;
 }
 
 async function addManual({ path: file, name, category }) {
@@ -534,7 +316,7 @@ async function addManual({ path: file, name, category }) {
     const ov = (state.overrides[dup.id] ||= {});
     if (ov.hidden || dup.autoHidden) ov.hidden = false;
     saveState();
-    send('library:items', payload());
+    pushItems();
     return { exists: true, item: view(dup) };
   }
   const it = {
@@ -554,7 +336,7 @@ async function addManual({ path: file, name, category }) {
   state.manual = [...(state.manual || []).filter((m) => m.id !== it.id), it];
   state.items = withManual(state.items.filter((i) => i.id !== it.id));
   saveState();
-  send('library:items', payload());
+  pushItems();
   extractIcons();
   if (it.category === 'game') fetchCovers();
   return { item: view(it) };
@@ -575,7 +357,7 @@ ipcMain.handle('item:remove', (_e, id) => {
   if (f) fs.rm(path.join(COVER_DIR, f), () => {});
   delete state.overrides[id];
   saveState();
-  send('library:items', payload());
+  pushItems();
   return true;
 });
 
@@ -585,11 +367,7 @@ ipcMain.handle('cover:search', async (_e, q) => {
   q = String(q || '').trim().slice(0, 80);
   if (!q) return [];
   try {
-    const r = await fetch(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=US`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    const j = await r.json();
-    return (j.items || []).slice(0, 12).map((x) => ({ id: String(x.id), name: x.name }));
+    return (await storeSearch(q)).slice(0, 12).map((x) => ({ id: String(x.id), name: x.name }));
   } catch {
     return null; // offline
   }
@@ -604,7 +382,7 @@ function setCover(id, patch) {
   Object.assign(ov, patch);
   saveState();
   if (ov.coverAppId) fetchCovers(); // header art for the "Recent" card
-  send('library:items', payload());
+  pushItems();
   return view(it);
 }
 ipcMain.handle('cover:set', async (_e, id, choice) => {
@@ -629,134 +407,37 @@ ipcMain.handle('cover:set', async (_e, id, choice) => {
 });
 
 // ---------- leftovers clean-up ----------
-// Removes dead "installed program" entries (registry) and moves empty Steam
-// folders to the Recycle Bin. Registry keys are exported to a .reg backup first.
-const UNINSTALL_KEY_RE =
-  /^HKEY_(LOCAL_MACHINE|CURRENT_USER)\\SOFTWARE\\(WOW6432Node\\)?Microsoft\\Windows\\CurrentVersion\\Uninstall\\[^"\\]+$/i;
-const run = (cmd, args) =>
-  new Promise((resolve) => execFile(cmd, args, { windowsHide: true, timeout: 120e3 }, (err, out) => resolve({ ok: !err, out: String(out || '') })));
-const regExists = async (key) => (await run('reg', ['query', key])).ok;
-const psEncoded = (script) => ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
-
-const TRASH_LIMIT = 2 * 1024 ** 3; // 2 GB
-function dirSize(dir, cap) {
-  let total = 0;
-  const walk = (d) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (total > cap) return;
-      const p = path.join(d, e.name);
-      try {
-        if (e.isDirectory()) walk(p);
-        else total += fs.statSync(p).size;
-      } catch {}
-    }
-  };
-  try {
-    walk(dir);
-  } catch {}
-  return total;
-}
-
-async function removeLeftovers(ids) {
-  const list = ids.map(find).filter((it) => it && it.leftover);
-  const tooBig = [];
-  const backupDir = path.join(userDir, 'backups', 'leftovers-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
-  const keys = list.filter((it) => it.regKey && UNINSTALL_KEY_RE.test(it.regKey));
-  if (keys.length) {
-    fs.mkdirSync(backupDir, { recursive: true });
-    for (const it of keys) await run('reg', ['export', it.regKey, path.join(backupDir, it.regKey.split('\\').pop().replace(/[^\w.-]+/g, '_') + '.reg'), '/y']);
-    // per-user entries need no admin rights
-    for (const it of keys.filter((k) => /^HKEY_CURRENT_USER/i.test(k.regKey))) await run('reg', ['delete', it.regKey, '/f']);
-    // machine-wide entries: one elevated call, so Windows asks only once
-    const machine = keys.filter((k) => /^HKEY_LOCAL_MACHINE/i.test(k.regKey));
-    if (machine.length) {
-      const cmdLine = '/c ' + machine.map((k) => `reg delete "${k.regKey}" /f`).join(' & ');
-      await run('powershell.exe', psEncoded(`Start-Process cmd.exe -ArgumentList '${cmdLine.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden`));
-    }
-  }
-  const removed = new Set();
-  for (const it of list) {
-    let ok = true;
-    if (it.regKey) ok = UNINSTALL_KEY_RE.test(it.regKey) && !(await regExists(it.regKey));
-    // empty Steam folder of an uninstalled game -> Recycle Bin (can be restored)
-    if (ok && it.source === 'steam' && it.installDir && /\\steamapps\\common\\[^\\]+\\?$/i.test(it.installDir) && fs.existsSync(it.installDir)) {
-      // a huge folder could skip the Recycle Bin and be gone for good – leave those to the user
-      if (dirSize(it.installDir, TRASH_LIMIT) > TRASH_LIMIT) {
-        tooBig.push(it.installDir);
-        continue;
-      }
-      try {
-        await shell.trashItem(it.installDir);
-      } catch {
-        ok = false;
-      }
-    }
-    // a leftover with nothing we know how to remove (old cache entry) just drops off the list
-    if (ok) removed.add(it.id);
-  }
-  state.items = state.items.filter((i) => !removed.has(i.id));
+const BACKUP_DIR = path.join(userDir, 'backups');
+ipcMain.handle('leftover:remove', async (_e, ids) => {
+  const list = (Array.isArray(ids) ? ids.map(String) : []).map(find).filter((it) => it && it.leftover);
+  const res = await removeLeftovers(list, { backupRoot: BACKUP_DIR, trash: (d) => shell.trashItem(d) });
+  state.items = state.items.filter((i) => !res.removed.has(i.id));
   saveState();
-  send('library:items', payload());
-  tooBig.forEach((d) => shell.openPath(d));
-  return { removed: removed.size, total: list.length, tooBig: tooBig.length, backup: keys.length ? backupDir : null };
-}
-ipcMain.handle('leftover:remove', (_e, ids) => removeLeftovers(Array.isArray(ids) ? ids.map(String) : []));
+  pushItems();
+  res.tooBig.forEach((d) => shell.openPath(d)); // too big for the Recycle Bin – left to the user
+  return { removed: res.removed.size, total: list.length, tooBig: res.tooBig.length, backup: res.backup };
+});
 ipcMain.handle('app:openPath', (_e, p) => {
   // only our own backup folders
-  if (typeof p === 'string' && path.resolve(p).startsWith(path.join(userDir, 'backups'))) shell.openPath(p);
+  if (typeof p === 'string' && path.resolve(p).startsWith(BACKUP_DIR)) shell.openPath(p);
 });
 
 // ---------- updates ----------
-// Installed builds check GitHub releases, download in the background and install on restart.
-let updateState = { status: 'idle' };
-let updater = null;
-const setUpdate = (patch) => {
-  updateState = { ...updateState, ...patch };
-  send('update:status', updateStatus());
-};
-const updateStatus = () => ({ ...updateState, current: app.getVersion(), enabled: app.isPackaged });
-function initUpdates() {
-  if (!app.isPackaged || updater) return;
-  updater = require('electron-updater').autoUpdater;
-  updater.autoDownload = true;
-  updater.autoInstallOnAppQuit = true;
-  updater.on('checking-for-update', () => setUpdate({ status: 'checking', error: null }));
-  updater.on('update-available', (i) => setUpdate({ status: 'downloading', version: i.version, percent: 0 }));
-  updater.on('update-not-available', () => setUpdate({ status: 'latest' }));
-  updater.on('download-progress', (p) => setUpdate({ percent: Math.round(p.percent) }));
-  updater.on('update-downloaded', (i) => {
-    setUpdate({ status: 'ready', version: i.version });
-    refreshTrayMenu();
-  });
-  updater.on('error', (e) => setUpdate({ status: 'error', error: String((e && e.message) || e).slice(0, 200) }));
-  const check = () => updater.checkForUpdates().catch(() => {});
-  setTimeout(check, 10e3);
-  setInterval(check, 6 * 3600e3);
-}
+const updates = createUpdates({
+  app,
+  onStatus: (s) => {
+    send('update:status', s);
+    if (s.status === 'ready') refreshTrayMenu();
+  },
+});
 function installUpdate() {
-  if (!updater || updateState.status !== 'ready') return;
-  quitting = true;
-  updater.quitAndInstall(true, true); // silent, start Shelf again afterwards
+  if (!updates.readyVersion()) return;
+  quitting = true; // let the windows close instead of hiding to the tray
+  updates.install();
 }
-ipcMain.handle('update:get', () => updateStatus());
-ipcMain.handle('update:check', () => (updater ? updater.checkForUpdates().catch(() => {}) && true : false));
+ipcMain.handle('update:get', () => updates.status());
+ipcMain.handle('update:check', () => updates.check());
 ipcMain.handle('update:install', () => installUpdate());
-
-ipcMain.handle('item:openFolder', (_e, id) => {
-  const it = find(id);
-  if (!it) return false;
-  if (it.installDir && fs.existsSync(it.installDir)) shell.openPath(it.installDir);
-  else if (it.exe && fs.existsSync(it.exe)) shell.showItemInFolder(it.exe);
-  else return false;
-  return true;
-});
-
-ipcMain.handle('item:uninstall', (_e, id) => {
-  const it = find(id);
-  if (it?.source === 'steam') return shell.openExternal('steam://uninstall/' + it.steamAppId).then(() => true);
-  // Let Windows handle uninstalling (it shows its own confirmation)
-  return shell.openExternal('ms-settings:appsfeatures').then(() => true);
-});
 
 // ---------- icons ----------
 const ICON_DIR = path.join(userDir, 'icons');
@@ -803,7 +484,6 @@ const webPrefs = {
 };
 let quitting = false;
 let tray = null;
-let quick = null;
 let hotkey = null;
 
 function lockDown(w) {
@@ -844,117 +524,65 @@ function showMain() {
 }
 
 // Spotlight-style quick launcher
-const QUICK_W = 720; // includes room for the panel shadow
-const QUICK_PAD = { w: 48, h: 52 }; // that room: body padding around the panel
-// Without GPU compositing (virtual machines, remote desktop, hardware acceleration off) Windows
-// draws a transparent window on a dark box. Then the launcher is a plain window the size of the panel.
-let quickPlain = false;
-const QUICK_MAX_PANEL = 568; // tallest the results panel gets
-const quickW = () => (quickPlain ? QUICK_W - QUICK_PAD.w : QUICK_W);
-const quickBg = () => (isDark() ? '#1c1916' : '#fbfaf6'); // the panel colour (--paper in quick.css)
-// GPU compositing: true / false, or null until Chromium has told us (~150 ms after start; before that it reads as off)
-let gpuKnown = false;
-const gpuOn = () => {
-  if (!gpuKnown) return null;
-  try {
-    return String(app.getGPUFeatureStatus().gpu_compositing || '').startsWith('enabled');
-  } catch {
-    return null;
-  }
-};
 const plainForced = () => !!(flag('--plain-quick') || state.plainQuick); // the user asked for the plain window
-function canBeTransparent() {
-  if (plainForced()) return false;
-  if (SHOT || process.platform !== 'win32') return true;
-  return gpuOn() !== false;
-}
-function rebuildQuick() {
-  quick.destroy();
-  createQuick();
-}
-// Swap the window when the GPU answer arrives (only while it's hidden)
-function syncQuickMode() {
-  if (SHOT || !quick || quick.isDestroyed() || quick.isVisible()) return;
-  if (!canBeTransparent() !== quickPlain) rebuildQuick();
-}
+const quick = createQuickWindow({
+  icon: ICON,
+  webPreferences: webPrefs,
+  debug: !!SHOT,
+  plainForced,
+  isDark: () => isDark(),
+  isQuitting: () => quitting,
+  onCreate: (w) => {
+    lockDown(w);
+    if (SHOT && flag('--quick')) debugCapture(w, () => quick.show());
+  },
+});
+const plainInfo = () => ({ on: plainForced(), gpu: quick.gpuOn() });
 app.on('gpu-info-update', () => {
-  gpuKnown = true;
-  syncQuickMode();
+  quick.gpuReady();
   send('quick:plain', plainInfo()); // the settings show the real GPU state once it is known
 });
 // Settings switch: some PCs draw the dark box even with a working GPU
-const plainInfo = () => ({ on: plainForced(), gpu: gpuOn() });
 ipcMain.handle('quick:plain:get', () => plainInfo());
 ipcMain.handle('quick:plain:set', (_e, on) => {
   state.plainQuick = !!on;
   saveState();
-  if (quick && !quick.isDestroyed() && !quick.isVisible()) rebuildQuick();
+  quick.settingChanged();
   return plainInfo();
 });
-function createQuick() {
-  quickPlain = !canBeTransparent();
-  quick = new BrowserWindow({
-    width: quickW(),
-    height: 72,
-    frame: false,
-    transparent: !quickPlain,
-    ...(quickPlain ? { backgroundColor: quickBg() } : {}),
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    show: false,
-    icon: ICON,
-    webPreferences: webPrefs,
-  });
-  quick.setAlwaysOnTop(true, 'pop-up-menu');
-  quick.loadFile(path.join(__dirname, 'renderer', 'quick.html'), quickPlain ? { query: { plain: '1' } } : undefined);
-  lockDown(quick);
-  quick.on('blur', () => !SHOT && hideQuick());
-  quick.on('close', (e) => {
-    if (!quitting) {
-      e.preventDefault();
-      hideQuick();
-    }
-  });
-  if (SHOT && flag('--quick')) debugCapture(quick, () => showQuick());
-}
-
-function showQuick() {
-  syncQuickMode();
-  if (!quick || quick.isDestroyed()) createQuick();
-  // Open on the screen where the mouse is, a bit above the middle
-  const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  quick.setPosition(Math.round(d.x + (d.width - quickW()) / 2), Math.round(d.y + d.height * 0.22));
-  if (quickPlain) quick.setBackgroundColor(quickBg()); // theme may have changed
-  quick.webContents.send('quick:open');
-  quick.show();
-  quick.focus();
-}
-function hideQuick() {
-  if (quick && !quick.isDestroyed() && quick.isVisible()) quick.hide();
-}
-function toggleQuick() {
-  if (quick && !quick.isDestroyed() && quick.isVisible() && quick.isFocused()) hideQuick();
-  else showQuick();
-}
-
-// h = height of the panel itself
-ipcMain.handle('quick:resize', (_e, h) => {
-  if (!quick || quick.isDestroyed()) return;
-  const [x, y] = quick.getPosition();
-  const pad = quickPlain ? 0 : QUICK_PAD.h;
-  quick.setBounds({ x, y, width: quickW(), height: Math.max(48, Math.min(QUICK_MAX_PANEL, Math.round(h))) + pad });
-});
-ipcMain.handle('quick:hide', () => hideQuick());
+ipcMain.handle('quick:resize', (_e, h) => quick.resize(h));
+ipcMain.handle('quick:hide', () => quick.hide());
 ipcMain.handle('quick:openMain', () => {
-  hideQuick();
+  quick.hide();
   showMain();
 });
 ipcMain.handle('app:hotkey', () => hotkey);
+
+// ---------- bug reports ----------
+// Settings: copy info about this PC (no names or paths), or copy it and open the GitHub form
+const ISSUE_URL = 'https://github.com/c0demite/Shelf/issues/new?template=bug_report.yml';
+function copyDiagnostics() {
+  const text = diagnosticsReport({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    os: { release: os.release(), arch: process.arch },
+    lang: I18N.getLang(),
+    theme: state.theme || 'dark',
+    gpu: quick.gpuOn(),
+    plainSetting: !!state.plainQuick,
+    // real pixels, as people know their screens
+    displays: screen.getAllDisplays().map((d) => ({ width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor), scaleFactor: d.scaleFactor })),
+    items: state.items.map(view),
+    lastScan: state.lastScan,
+  });
+  clipboard.writeText(text);
+  return text;
+}
+ipcMain.handle('diag:copy', () => copyDiagnostics());
+ipcMain.handle('diag:report', () => {
+  copyDiagnostics();
+  return shell.openExternal(ISSUE_URL).then(() => true, () => false);
+});
 
 // ---------- start with Windows ----------
 // Starts hidden in the tray, so the shortcut is ready right after login.
@@ -1007,7 +635,7 @@ const HOTKEYS = ['Control+Space', 'Control+Alt+Space', 'Alt+Shift+Space'];
 function registerHotkey() {
   for (const k of HOTKEYS) {
     try {
-      if (globalShortcut.register(k, toggleQuick)) {
+      if (globalShortcut.register(k, quick.toggle)) {
         hotkey = k.replace('Control', 'Ctrl');
         console.log('hotkey:', k);
         return;
@@ -1017,30 +645,30 @@ function registerHotkey() {
   hotkey = null;
 }
 
+function trayMenu() {
+  const ready = updates.readyVersion();
+  return Menu.buildFromTemplate([
+    ...(ready ? [{ label: t('tray.update', ready), click: installUpdate }, { type: 'separator' }] : []),
+    { label: t('tray.open'), click: showMain },
+    { label: t('tray.quick') + (hotkey ? `\t${I18N.keyLabel(hotkey)}` : ''), click: quick.show },
+    { label: t('tray.rescan'), click: () => doScan() },
+    { type: 'separator' },
+    { label: t('tray.auto'), type: 'checkbox', checked: getAutostart(), click: (m) => setAutostart(m.checked) },
+    {
+      label: t('tray.lang'),
+      submenu: I18N.LANGS.map(([code, name]) => ({ label: name, type: 'radio', checked: I18N.getLang() === code, click: () => setLang(code) })),
+    },
+    { type: 'separator' },
+    { label: t('tray.quit'), click: () => { quitting = true; app.quit(); } },
+  ]);
+}
 function createTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
-  const menu = () =>
-    Menu.buildFromTemplate([
-      ...(updateState.status === 'ready' ? [{ label: t('tray.update', updateState.version), click: installUpdate }, { type: 'separator' }] : []),
-      { label: t('tray.open'), click: showMain },
-      { label: t('tray.quick') + (hotkey ? `\t${I18N.keyLabel(hotkey)}` : ''), click: showQuick },
-      { label: t('tray.rescan'), click: () => doScan() },
-      { type: 'separator' },
-      { label: t('tray.auto'), type: 'checkbox', checked: getAutostart(), click: (m) => setAutostart(m.checked) },
-      {
-        label: t('tray.lang'),
-        submenu: I18N.LANGS.map(([code, name]) => ({ label: name, type: 'radio', checked: I18N.getLang() === code, click: () => setLang(code) })),
-      },
-      { type: 'separator' },
-      { label: t('tray.quit'), click: () => { quitting = true; app.quit(); } },
-    ]);
-  trayMenu = menu;
   refreshTrayMenu();
   tray.on('click', showMain);
 }
-let trayMenu = null;
 function refreshTrayMenu() {
-  if (tray && trayMenu) {
+  if (tray) {
     tray.setContextMenu(trayMenu());
     tray.setToolTip(t('tray.tip', hotkey && I18N.keyLabel(hotkey)));
   }
@@ -1107,7 +735,7 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
     }
     if (SHOT) {
       await extractIcons();
-      if (flag('--quick')) createQuick();
+      if (flag('--quick')) quick.create();
       else createWindow();
       return;
     }
@@ -1117,10 +745,10 @@ if (!dumpMode && !SHOT && !app.requestSingleInstanceLock()) {
     if (flag('--enable-autostart') || (state.autostart && !getAutostart())) setAutostart(true);
     createTray();
     createWindow({ show: !process.argv.includes('--hidden') });
-    createQuick();
+    quick.create();
     extractIcons(); // icons for the cached list while the fresh scan runs
     doScan();
-    initUpdates();
+    updates.start();
     setTimeout(trackPlaytime, 15e3);
     setInterval(trackPlaytime, PLAY_TICK);
   });

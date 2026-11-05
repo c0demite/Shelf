@@ -17,6 +17,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
     "dist": "electron-builder --win --x64",
     "pack": "electron-builder --win --x64 --dir"
   },
